@@ -1,0 +1,167 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+
+# =============================================================================
+# Retrieval Outputs - DO NOT UPLOAD TO GITHUB
+# =============================================================================
+
+# Posterior/sampling outputs
+experiments/**/posterior*.nc
+experiments/**/posterior*.h5
+experiments/**/posterior*.hdf5
+experiments/**/*_samples.csv
+experiments/**/*posterior*.csv
+experiments/**/observed_data*.csv
+experiments/**/chains/
+experiments/**/traces/
+experiments/**/samples/
+
+# Log files
+experiments/**/*.log
+*.log
+
+# Plot outputs
+experiments/**/*.png
+experiments/**/*.pdf
+experiments/**/*.jpg
+experiments/**/*.svg
+obs_data/**/*_plot.png
+obs_data/**/all_*_combined.png
+
+# Corner plots and diagnostic plots
+experiments/**/corner*.png
+experiments/**/corner*.pdf
+experiments/**/diagnostic*.png
+experiments/**/trace*.png
+
+# =============================================================================
+# Large Data Files - DO NOT UPLOAD TO GITHUB
+# =============================================================================
+
+# Opacity data files (usually very large)
+opac_data/**/*.npz
+opac_data/**/*.npy
+opac_data/**/*.hdf5
+opac_data/**/*.h5
+opac_data/**/*.dat
+opac_data/**/*.fits
+opac_data/**/*.txt
+
+# Large observational data files
+obs_data/**/*.fits
+obs_data/**/*.hdf5
+obs_data/**/*.h5
+
+# Telescope data (potentially large)
+telescope_data/**/*.fits
+telescope_data/**/*.hdf5
+telescope_data/**/*.h5
+
+# JANAF data binaries (if any)
+JANAF_data/**/*.npz
+JANAF_data/**/*.npy
+
+# Stash directory (old/test code)
+stash/
+
+# =============================================================================
+# Temporary and Output Files
+# =============================================================================
+
+# Combined observation outputs
+obs_data/combined_observations*.txt
+obs_data/all_observations*.txt
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~.nib
+
+# Environment variables
+.env
+.env.local
+
+AGENTS.md

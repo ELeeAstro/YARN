@@ -1,0 +1,159 @@
+obs:
+
+  path: ../obs_data/WASP-17b_JWST.txt
+
+physics:
+
+  nlay: 99
+
+  vert_struct: isothermal
+  vert_chem: None
+  vert_cloud: None
+
+  opac_line: lbl
+  opac_ray: lbl
+  opac_cia: lbl
+  opac_cloud: None
+
+  rt_scheme: transit_1d
+
+opac:
+
+  wl_master: wl_dnu_1.txt
+  full_grid: False
+
+  line:
+    - {species: H2O, path: ../opac_data/lbl/H2O_dnu_1.npz}
+    - {species: CO2, path: ../opac_data/lbl/CO2_dnu_1.npz}
+    - {species: CO, path: ../opac_data/lbl/CO_dnu_1.npz}
+    - {species: CH4, path: ../opac_data/lbl/CH4_dnu_1.npz}      
+    - {species: K, path: ../opac_data/lbl/K_dnu_1.npz}
+  ray:
+    - {species: H2}
+    - {species: He}
+  cia: 
+    - {species: H2-H2, path: ../opac_data/cia/H2-H2_2011.npz}
+    - {species: H2-He, path: ../opac_data/cia/H2-He_2011.npz}
+    - {species: H-, path: ./}
+  cloud: None
+
+params:
+
+  - { name: R_s,   dist: delta,   value: 1.57, transform: identity, init: 1.57}
+  - { name: p_bot, dist: delta,   value: 100.0,  transform: identity, init: 100.0 }
+  - { name: p_top, dist: delta,   value: 1e-8, transform: identity, init: 1e-8}
+  - { name: rho_d, dist: delta,   value: 1.0, transform: identity, init: 1.}
+
+  - { name: log_g, dist: uniform, low: 2.2,   high: 3.0, transform: logit, init: 2.8 }
+  - { name: R_p, dist: uniform, low: 1.6,   high: 2.1,  transform: logit, init: 1.4}
+  - { name: T_iso, dist: uniform, low: 400.0,   high: 2300.0, transform: logit, init: 1500.0 }
+
+  - { name: f_H2O, dist: log_uniform, low: 1e-14,   high: 1e-2,  transform: log, init: 1e-6}
+  - { name: f_CO2, dist: log_uniform, low: 1e-14,   high: 1e-2,  transform: log, init: 1e-6}
+  - { name: f_CO, dist: log_uniform, low: 1e-14,   high: 1e-2,  transform: log, init: 1e-6}
+  - { name: f_CH4, dist: log_uniform, low: 1e-14,   high: 1e-2,  transform: log, init: 1e-6}
+  - { name: f_K, dist: log_uniform, low: 1e-14,   high: 1e-2,  transform: log, init: 1e-6}
+  - { name: f_H-, dist: log_uniform, low: 1e-14,   high: 1e-2,  transform: log, init: 1e-6}
+
+  # - { name: f_cloud, dist: uniform, low: 0.0,   high: 1.0, transform: logit, init: 0.5}
+
+  # - { name: cld_r, dist: log_uniform, low: 1e-3,   high: 1e3,  transform: log, init: 1e0}
+  # - { name: q_c_0, dist: log_uniform, low: 1e-9,   high: 1e-2,  transform: log, init: 1e-6}
+  # - { name: alpha, dist: log_uniform, low: 1e-6,   high: 1e0,  transform: log, init: 1e-6}
+  # - { name: p_base, dist: log_uniform, low: 1e-7,   high: 1e1,  transform: log, init: 1e-6}
+
+  # - { name: n, dist: uniform, low: 1.2,   high: 1.8,  transform: logit, init: 1.4}
+
+  # - { name: k_node_0, dist: uniform, low: -10.0, high: 0.0, transform: logit, init: -5.0 }
+  # - { name: k_node_1, dist: uniform, low: -10.0, high: 0.0, transform: logit, init: -5.0 }
+  # - { name: k_node_2, dist: uniform, low: -10.0, high: 0.0, transform: logit, init: -5.0 }
+  # - { name: k_node_3, dist: uniform, low: -10.0, high: 0.0, transform: logit, init: -5.0 }
+  # - { name: k_node_4, dist: uniform, low: -10.0, high: 0.0, transform: logit, init: -5.0 }
+  # - { name: k_node_5, dist: uniform, low: -10.0, high: 0.0, transform: logit, init: -5.0 }
+  # - { name: k_node_6, dist: uniform, low: -10.0, high: 0.0, transform: logit, init: -5.0 }
+
+  # - { name: wl_node_0, dist: delta, value: 0.5, transform: identity, init: 0.5 }
+  # - { name: wl_node_1, dist: delta, value: 1.0, transform: identity, init: 1.0 }
+  # - { name: wl_node_2, dist: delta, value: 1.5, transform: identity, init: 1.5 }
+  # - { name: wl_node_3, dist: delta, value: 2.0, transform: identity, init: 2.0 }
+  # - { name: wl_node_4, dist: delta, value: 2.5, transform: identity, init: 2.5 }
+  # - { name: wl_node_5, dist: delta, value: 3.0, transform: identity, init: 3.0 }
+  # - { name: wl_node_6, dist: delta, value: 3.5, transform: identity, init: 3.5 }
+
+
+sampling:
+
+  engine: jaxns
+
+  nuts:
+    backend: numpyro
+    warmup: 100
+    draws: 100
+    seed: 42
+    chains: 1
+
+  jaxns:
+    # ---- core NS config ----
+    max_samples: 100000          # hard cap on nested-sampling iterations
+    num_live_points: 100         # live points (posterior resolution)
+
+    # Slice sampler hyperparameters
+    s: 4                         # slices per dimension (default ~4)
+    k: 0                         # phantom samples (0 = off, >0 for hard posteriors)
+    c: null                      # parallel chains (null -> jaxns default, ~20*D)
+    shell_fraction: 0.5          # fraction of shell explored per step (0<sf<=1)
+
+    # Global behaviour flags
+    difficult_model: false       # robust defaults for gnarly posteriors
+    parameter_estimation: true   # tune for good posterior, not just evidence
+    gradient_guided: false       # use gradients for proposals (only if stable)
+    init_efficiency_threshold: 0.1  # >0: initial uniform sampling until eff>thr
+    verbose: true               # print textual progress to CLI
+
+    # ---- termination controls ----
+    termination:
+      ess: 300                        # target effective sample size
+      evidence_uncert: 0.01            # stop when σ_logZ < 0.3
+      dlogZ: 1.0                     # stop when remaining evidence small
+      max_samples: 100000             # safety cap for samples
+      max_num_likelihood_evaluations: null
+      rtol: null
+      atol: null
+
+    # ---- posterior handling ----
+    posterior_samples: 5000           # equal-weight posterior draws
+    seed: 42                          # RNG seed for JAX
+
+  numpyro_ns:
+    # --- bookkeeping ---
+    seed: 43
+    posterior_samples: 4000
+
+    # --- constructor args forwarded to numpyro.contrib.nested_sampling.NestedSampler ---
+    num_live_points: 100
+    max_samples: 150000
+    constructor_kwargs:
+      difficult_model: false
+      parameter_estimation: true
+      s: 5
+      k: 0
+      c: null
+      shell_fraction: 0.5
+      gradient_guided: false
+      init_efficiency_threshold: 0.1
+      verbose: true
+
+    # --- stopping criteria (mirrors jaxns TerminationCondition) ---
+    termination:
+      ess: 400
+      evidence_uncert: 0.1
+      dlogZ: 0.1
+      max_samples: 150000
+      max_num_likelihood_evaluations: null
+      rtol: null
+      atol: null
+
+runtime:
+  platform: cpu           # cpu | gpu | cuda | metal
+  cuda_visible_devices: 0  # or "0,1"
+  threads: 1
