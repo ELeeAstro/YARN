@@ -28,8 +28,6 @@ from jaxns.utils import save_results
 from build_prepared import Prepared
 
 tfpd = tfp.distributions
-tfb  = tfp.bijectors
-
 
 def make_jaxns_model(cfg, prep: Prepared) -> Model:
     """

@@ -6,9 +6,11 @@ physics:
 
   nlay: 99
 
-  vert_struct: Barstow
-  vert_chem: None
-  vert_cloud: None
+  vert_Tp: Barstow
+  vert_alt: variable_g
+  vert_chem: constant_vmr
+  vert_mu: dynamic
+
 
   opac_line: lbl
   opac_ray: lbl
@@ -20,7 +22,8 @@ physics:
 opac:
 
   #wl_master: wl_petitradtrans_R1000.txt
-  wl_master: wl_taurex_R15000.txt
+  #wl_master: wl_taurex_R15000.txt
+  wl_master: wl_dnu_1.txt
   full_grid: False
   ck: False
 
@@ -28,9 +31,13 @@ opac:
     #- {species: H2O, path: ../opac_data/ck/1H2-16O__POKAZATEL__R1000_0.3-50mu.ktable.petitRADTRANS.h5}
     #- {species: Na, path: ../opac_data/ck/23Na__Kurucz-Na.R1000_0.3-50mu.ktable.petitRADTRANS.h5}
     #- {species: K, path: ../opac_data/ck/39K__Kurucz-K.R1000_0.3-50mu.ktable.petitRADTRANS.h5}
-      - {species: H2O, path: ../opac_data/lbl/1H2-16O__POKAZATEL__R15000_0.3-50mu.xsec.TauREx.h5}
-      - {species: Na, path: ../opac_data/lbl/23Na__Kurucz-Na.R15000_0.3-50mu.xsec.TauREx.h5}
-      - {species: K, path: ../opac_data/lbl/39K__Kurucz-K.R15000_0.3-50mu.xsec.TauREx.h5} 
+    #  - {species: H2O, path: ../opac_data/lbl/1H2-16O__POKAZATEL__R15000_0.3-50mu.xsec.TauREx.h5}
+   #   - {species: Na, path: ../opac_data/lbl/23Na__Kurucz-Na.R15000_0.3-50mu.xsec.TauREx.h5}
+   #   - {species: K, path: ../opac_data/lbl/39K__Kurucz-K.R15000_0.3-50mu.xsec.TauREx.h5} 
+
+    - {species: H2O, path: ../opac_data/lbl/H2O_dnu_1.npz}
+    - {species: Na, path: ../opac_data/lbl/Na_dnu_1.npz}
+    - {species: K, path: ../opac_data/lbl/K_dnu_1.npz}
 
   ray:
     - {species: H2}
@@ -44,7 +51,7 @@ params:
 
   - { name: R_s,   dist: delta,   value: 1.18655, transform: identity, init: 1.18655}
   - { name: p_bot, dist: delta,   value: 10.0,  transform: identity, init: 10.0 }
-  - { name: p_top, dist: delta,   value: 1e-5, transform: identity, init: 1e-5}
+  - { name: p_top, dist: delta,   value: 1e-8, transform: identity, init: 1e-8}
   - { name: log_g, dist: delta,   value: 3.0, transform: identity, init: 3.0}
   #- { name: log_g, dist: uniform, low: 2.9,   high: 3.3,  transform: logit, init: 3.0}
 
@@ -64,7 +71,7 @@ params:
 
 sampling:
 
-  engine: jaxns
+  engine: nuts
 
   nuts:
     backend: numpyro

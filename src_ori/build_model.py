@@ -16,7 +16,9 @@ import numpy as np
 from data_constants import kb, amu, R_jup, R_sun, bar
 
 from vert_alt import hypsometric, hypsometric_variable_g
-from vert_struct import isothermal, Milne, Guillot, Line, Barstow
+from vert_Tp import isothermal, Milne, Guillot, Line, Barstow
+from vert_chem import constant_vmr, chemical_equilibrium
+from vert_mu import constant_mu, compute_mu
 
 from opacity_line import zero_line_opacity, compute_line_opacity
 from opacity_ck import zero_ck_opacity, compute_ck_opacity
@@ -25,13 +27,10 @@ from opacity_cia import zero_cia_opacity, compute_cia_opacity
 from opacity_cloud import zero_cloud_opacity, compute_grey_cloud_opacity, compute_f18_cloud_opacity
 
 import build_opacities as XS
-from RT_trans_1D import compute_transit_depth_1d
-from vert_mu import compute_mean_molecular_weight
-from instru_convolve import apply_response_functions
 
-solar_h2 = 0.5
-solar_he = 0.085114
-solar_h2_he = solar_h2 + solar_he
+from RT_trans_1D import compute_transit_depth_1d
+
+from instru_convolve import apply_response_functions
 
 def build_forward_model(cfg, obs, return_highres: bool = False):
 
@@ -48,19 +47,66 @@ def build_forward_model(cfg, obs, return_highres: bool = False):
     # Get the kernel for forward model
     phys = cfg.physics
 
-    vert_struct = getattr(phys, "vert_struct", "isothermal")
-    if vert_struct == "isothermal":
-        vert_kernel = isothermal
-    elif vert_struct == "Milne":
-        vert_kernel = Milne
-    elif vert_struct == "Guillot":
-        vert_kernel = Guillot
-    elif vert_struct == "Line":
-        vert_kernel = Line
-    elif vert_struct == "Barstow":
-        vert_kernel = Barstow
+    vert_tp_name = getattr(phys, "vert_Tp", None)
+    if vert_tp_name in (None, "None"):
+        vert_tp_name = getattr(phys, "vert_struct", None)
+    if vert_tp_name in (None, "None"):
+        vert_tp_name = "isothermal"
+    vert_tp_name = str(vert_tp_name).lower()
+    if vert_tp_name in ("isothermal", "constant"):
+        Tp_kernel = isothermal
+    elif vert_tp_name == "milne":
+        Tp_kernel = Milne
+    elif vert_tp_name == "guillot":
+        Tp_kernel = Guillot
+    elif vert_tp_name == "line":
+        Tp_kernel = Line
+    elif vert_tp_name == "barstow":
+        Tp_kernel = Barstow
     else:
-        raise NotImplementedError(f"Unknown vert_struct='{vert_struct}'")
+        raise NotImplementedError(f"Unknown vert_Tp='{vert_tp_name}'")
+
+    vert_alt_name = getattr(phys, "vert_alt", None)
+    if vert_alt_name in (None, "None"):
+        vert_alt_name = "variable_g"
+    vert_alt_name = str(vert_alt_name).lower()
+    if vert_alt_name in ("constant", "constant_g", "fixed"):
+        altitude_kernel = hypsometric
+    elif vert_alt_name in ("variable", "variable_g"):
+        altitude_kernel = hypsometric_variable_g
+    else:
+        raise NotImplementedError(f"Unknown altitude scheme='{vert_alt_name}'")
+
+    vert_chem_name = getattr(phys, "vert_chem", None)
+    if vert_chem_name in (None, "None"):
+        vert_chem_name = "constant_vmr"
+    vert_chem_name = str(vert_chem_name).lower()
+    if vert_chem_name in ("constant", "constant_vmr"):
+        chemistry_kernel = constant_vmr
+    elif vert_chem_name in ("ce", "chemical_equilibrium"):
+        chemistry_kernel = chemical_equilibrium
+    else:
+        raise NotImplementedError(f"Unknown chemistry scheme='{vert_chem_name}'")
+
+    vert_mu_name = getattr(phys, "vert_mu", None)
+    if vert_mu_name in (None, "None"):
+        vert_mu_name = "auto"
+    vert_mu_name = str(vert_mu_name).lower()
+    if vert_mu_name == "auto":
+        def mu_kernel(params, vmr_lay, nlay):
+            if "mu" in params:
+                return constant_mu(params, nlay)
+            return compute_mu(vmr_lay)
+    elif vert_mu_name in ("constant", "fixed"):
+        def mu_kernel(params, vmr_lay, nlay):
+            del vmr_lay
+            return constant_mu(params, nlay)
+    elif vert_mu_name in ("dynamic", "variable", "vmr"):
+        def mu_kernel(params, vmr_lay, nlay):
+            del params, nlay
+            return compute_mu(vmr_lay)
+    else:
+        raise NotImplementedError(f"Unknown mean-molecular-weight scheme='{vert_mu_name}'")
 
     ck = False
     line_opac_scheme = getattr(phys, "opac_line", "None")
@@ -133,42 +179,16 @@ def build_forward_model(cfg, obs, return_highres: bool = False):
         
         # Vertical atmospheric T-p layer structure
         p_lay = (p_lev[1:] - p_lev[:-1]) / jnp.log(p_lev[1:]/p_lev[:-1])
-        T_lay = vert_kernel(p_lev, params)
+        T_lay = Tp_kernel(p_lay, params)
 
-        # Get the VMR structure of the atmosphere
-        vmr = {}
-        for k, v in params.items():
-            if k.startswith("log_10_f_"):
-                sp = k[len("log_10_f_"):]
-                vmr[sp] = 10.0 ** v          # store species key, e.g. "H2O"
-            elif k.startswith("f_"):
-                sp = k[len("f_"):]
-                vmr[sp] = v
-
-        # Calculate the mixing ratios of H2 and He
-        # Sum all trace species VMRs
-        total_trace_vmr = jnp.sum(jnp.array([v for v in vmr.values()]))
-        background_vmr = 1.0 - total_trace_vmr
-
-        vmr['H2'] = background_vmr * solar_h2 / solar_h2_he
-        vmr['He'] = background_vmr * solar_he / solar_h2_he
-
-        # Cast scalar VMR to per-layer VMR
-        vmr_lay = {species: jnp.full((nlay,), value) for species, value in vmr.items()}
+        # Get the vertical chemical structure (VMRs at each layer)
+        vmr_lay = chemistry_kernel(p_lay, T_lay, params, nlay)
 
         # Mean molecular weight calculation
-        if "mu" in params:
-            mu_const = jnp.asarray(params["mu"])
-            mu_lay = jnp.full((nlay,), mu_const)
-        else:
-            mu_lay, mu_dynamic = compute_mean_molecular_weight(vmr_lay)
-            if mu_lay is None or (not mu_dynamic):
-                raise ValueError("Dynamic mean molecular weight failed; provide 'mu' parameter or fix vert_mu.")
+        mu_lay = mu_kernel(params, vmr_lay, nlay)
 
         # Vertical altitude calculation
-        z_lev = hypsometric_variable_g(p_lev, T_lay, mu_lay, params)
-        z_lay = (z_lev[:-1] + z_lev[1:]) / 2.0
-        dz = jnp.diff(z_lev)
+        z_lev, z_lay, dz = altitude_kernel(p_lev, T_lay, mu_lay, params)
 
         # Atmospheric density and number density
         rho_lay = (mu_lay * amu * p_lay) / (kb * T_lay)
