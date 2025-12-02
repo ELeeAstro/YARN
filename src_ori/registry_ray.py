@@ -229,13 +229,14 @@ def load_ray_registry(cfg, obs, lam_master: Optional[np.ndarray] = None) -> None
                 name=name,
                 idx=index,
                 wavelengths=jnp.asarray(wavelengths),
-                cross_sections=jnp.asarray(log_xs, dtype=jnp.float32),
+                cross_sections=jnp.asarray(log_xs),
             )
         )
     _RAY_ENTRIES = tuple(entries)
     if not _RAY_ENTRIES:
         reset_registry()
         return
+    # Cast to float32 at the end to save GPU memory (even with jax_enable_x64=True)
     _RAY_SIGMA_CACHE = jnp.stack([entry.cross_sections for entry in _RAY_ENTRIES], axis=0)
     _clear_cache()
 

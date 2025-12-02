@@ -68,6 +68,8 @@ def main():
     # Set runtime environment to use cpus or gpus (for JAX)
     os.environ["CUDA_VISIBLE_DEVICES"] = str(cfg.runtime.cuda_visible_devices)
     platform = str(cfg.runtime.platform)  # "cpu" or "gpu"
+    #os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+    #os.environ["TF_GPU_ALLOCATOR=cuda_malloc_async"] = "cuda_malloc_async"
 
     # Prepare JAX and numpyro JAX settings
     from jax import config as jax_config

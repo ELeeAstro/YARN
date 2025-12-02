@@ -134,7 +134,7 @@ def _load_line_h5(index: int, path: str, target_wavelengths: np.ndarray) -> Line
         pressures=jnp.asarray(pressures),
         temperatures=jnp.asarray(temperatures),
         wavelengths=jnp.asarray(target_wavelengths),
-        cross_sections=jnp.asarray(xs_interp, dtype=jnp.float32),
+        cross_sections=jnp.asarray(xs_interp),
     )
 
 
@@ -200,7 +200,7 @@ def _load_line_npz(index: int, path: str, target_wavelengths: np.ndarray) -> Lin
         pressures=jnp.asarray(pressures),
         temperatures=jnp.asarray(temperatures),
         wavelengths=jnp.asarray(target_wavelengths),
-        cross_sections=jnp.asarray(xs_interp, dtype=jnp.float32),
+        cross_sections=jnp.asarray(xs_interp),
     )
 
 # Pad the tables to a rectangle (in dimension) - usually only in T as wavelength and pressure grids are the same lengths
@@ -289,6 +289,7 @@ def load_line_registry(cfg, obs, lam_master: Optional[np.ndarray] = None):
         return
     
     # Store all the data as global scope caches - stack using JAX
+    # Cast to float32 at the end to save GPU memory (even with jax_enable_x64=True)
     _LINE_SIGMA_CACHE = jnp.stack([entry.cross_sections for entry in _LINE_ENTRIES], axis=0)
     _LINE_TEMPERATURE_CACHE = jnp.stack([entry.temperatures for entry in _LINE_ENTRIES], axis=0)
 

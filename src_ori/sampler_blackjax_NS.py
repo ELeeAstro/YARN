@@ -3,7 +3,7 @@ sampler_blackjax_NS.py
 ======================
 
 Minimal BlackJAX nested-sampling scaffold:
-- build priors from cfg.params (delta, uniform, normal, lognormal)
+- build priors from cfg.params (delta, uniform, normal, lognormal, beta, gamma, etc.)
 - Gaussian log-likelihood via prep.fm and observed data
 - run blackjax.nss and return samples/evidence info
 """
@@ -18,8 +18,76 @@ import numpy as np
 import tqdm
 import blackjax
 from anesthetic import NestedSamples
+import distrax
 
 from build_prepared import Prepared
+
+
+def build_joint_prior_distrax(cfg) -> Tuple[distrax.Distribution, List[str]]:
+    """
+    Build a Joint distribution from cfg.params using Distrax.
+
+    Supported distribution types:
+    - uniform: requires 'low' and 'high'
+    - normal: requires 'mu' and 'sigma'
+    - lognormal: requires 'mu' and 'sigma' (via Transformed distribution)
+    - beta: requires 'alpha' and 'beta'
+    - gamma: requires 'concentration' and 'rate'
+    - delta: skipped (fixed parameters)
+
+    Parameters
+    ----------
+    cfg : object
+        Configuration object with cfg.params list
+
+    Returns
+    -------
+    prior : distrax.Joint
+        Joint distribution over all non-delta parameters
+    param_names : List[str]
+        Ordered list of parameter names
+    """
+    distributions = {}
+    param_names = []
+
+    for param in cfg.params:
+        if param.dist == "delta":
+            continue  # Skip fixed parameters
+
+        param_names.append(param.name)
+
+        if param.dist == "uniform":
+            distributions[param.name] = distrax.Uniform(
+                low=float(param.low),
+                high=float(param.high)
+            )
+        elif param.dist == "normal":
+            distributions[param.name] = distrax.Normal(
+                loc=float(param.mu),
+                scale=float(param.sigma)
+            )
+        elif param.dist == "lognormal":
+            # Distrax doesn't have LogNormal, use Transformed distribution
+            distributions[param.name] = distrax.Transformed(
+                distrax.Normal(loc=float(param.mu), scale=float(param.sigma)),
+                distrax.Lambda(lambda x: jnp.exp(x))
+            )
+        elif param.dist == "beta":
+            distributions[param.name] = distrax.Beta(
+                concentration1=float(param.alpha),
+                concentration0=float(param.beta)
+            )
+        elif param.dist == "gamma":
+            distributions[param.name] = distrax.Gamma(
+                concentration=float(param.concentration),
+                rate=float(param.rate)
+            )
+        else:
+            raise ValueError(f"Unknown distribution: {param.dist} for parameter {param.name}")
+
+    # Create Joint distribution
+    prior = distrax.Joint(distributions)
+    return prior, param_names
 
 
 def run_nested_blackjax(cfg, prep: Prepared, exp_dir: Path) -> Tuple[Dict[str, np.ndarray], Dict[str, Any]]:
@@ -33,33 +101,39 @@ def run_nested_blackjax(cfg, prep: Prepared, exp_dir: Path) -> Tuple[Dict[str, n
     seed = int(getattr(ns_cfg, "seed", 0))
     dlogz_stop = float(getattr(ns_cfg, "dlogz_stop", -3.0))
 
-    # Extract prior bounds from cfg.params for uniform priors only
-    prior_bounds = {}
-    for param in cfg.params:
-        if param.dist == "uniform":
-            prior_bounds[param.name] = (float(param.low), float(param.high))
+    # Build joint prior distribution from cfg.params
+    prior, param_names = build_joint_prior_distrax(cfg)
 
+    print(f"[blackjax_ns] Built joint prior with {len(param_names)} parameters: {param_names}")
+
+    # Initialize RNG and sample initial particles
     rng_key = jax.random.PRNGKey(seed)
     rng_key, prior_key = jax.random.split(rng_key)
-    particles, logprior_fn = blackjax.ns.utils.uniform_prior(prior_key, num_live, prior_bounds)
 
+    particles = prior.sample(seed=prior_key, sample_shape=(num_live,))
+
+    # Ensure consistent dtype (convert to float64 for consistency with x64 mode)
+    #particles = jax.tree.map(lambda x: jnp.asarray(x, dtype=jnp.float64), particles)
 
     print(f"Particle structure: {particles.keys()}")
 
-
+    # Prepare observed data (ensure float64 for consistency)
     lam   = jnp.asarray(prep.lam)
     dlam  = jnp.asarray(prep.dlam)
     y_obs = jnp.asarray(prep.y)
     dy_obs = jnp.asarray(prep.dy)
 
+    @jax.jit
     def loglikelihood_fn(params):
         mu = prep.fm(params)  # (N_obs,)
-        sig = jnp.clip(dy_obs, 1e-300, jnp.inf)
+        mu = jnp.asarray(mu)  # Ensure float64
+        sig = dy_obs
         r = (y_obs - mu) / sig
-        return -0.5 * jnp.sum(r * r + jnp.log(2 * jnp.pi) + 2 * jnp.log(sig))
+        loglike = -0.5 * jnp.sum(r * r + jnp.log(2 * jnp.pi) + 2 * jnp.log(sig))
+        return jnp.asarray(loglike)
 
     nested_sampler = blackjax.nss(
-        logprior_fn=logprior_fn,
+        logprior_fn=prior.log_prob,
         loglikelihood_fn=loglikelihood_fn,
         num_delete=num_delete,
         num_inner_steps=num_inner_steps,
@@ -80,8 +154,8 @@ def run_nested_blackjax(cfg, prep: Prepared, exp_dir: Path) -> Tuple[Dict[str, n
 
     dead = blackjax.ns.utils.finalise(live, dead)
 
-    rng_key, weight_key, sample_key = jax.random.split(rng_key,3)
-    re_samples = blackjax.ns.utils.sample(sample_key, dead, shape = num_live)
+    rng_key, weight_key, sample_key = jax.random.split(rng_key, 3)
+    re_samples = blackjax.ns.utils.sample(sample_key, dead, shape=num_live)
     log_w = blackjax.ns.utils.log_weights(weight_key, dead, shape=100)
     ns_ess = blackjax.ns.utils.ess(sample_key, dead)
     logzs = jax.scipy.special.logsumexp(log_w, axis=0)
@@ -107,7 +181,7 @@ def run_nested_blackjax(cfg, prep: Prepared, exp_dir: Path) -> Tuple[Dict[str, n
             subscript = ','.join(parts[1:])
             return rf"${base}_{{{subscript}}}$"
 
-    labels = {name: make_latex_label(name) for name in prior_bounds.keys()}
+    labels = {name: make_latex_label(name) for name in param_names}
 
     samples = NestedSamples(
         dead.particles,
@@ -127,8 +201,6 @@ def run_nested_blackjax(cfg, prep: Prepared, exp_dir: Path) -> Tuple[Dict[str, n
     samples_dict: Dict[str, np.ndarray] = {}
 
     # Extract samples for each varying parameter
-    # dead.particles is a dict with parameter names as keys
-    param_names = list(prior_bounds.keys())
     for name in param_names:
         samples_dict[name] = np.asarray(re_samples[name])
 
@@ -138,7 +210,7 @@ def run_nested_blackjax(cfg, prep: Prepared, exp_dir: Path) -> Tuple[Dict[str, n
         if name not in samples_dict:
             if param.dist == "delta":
                 val = float(param.value)
-                n_samples = len(re_samples)
+                n_samples = len(next(iter(re_samples.values())))
                 samples_dict[name] = np.full((n_samples,), val, dtype=np.float64)
 
     # print(f"[blackjax_ns] logZ = {evidence_info['logZ']:.2f} ± {evidence_info['logZ_err']:.2f}")

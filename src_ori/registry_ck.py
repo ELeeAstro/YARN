@@ -174,7 +174,7 @@ def _load_ck_h5(index: int, spec, path: str, obs: dict, use_full_grid: bool = Fa
         wavelengths=jnp.asarray(wavelengths_cut),
         g_points=jnp.asarray(g_points),
         g_weights=jnp.asarray(weights),
-        cross_sections=jnp.asarray(kcoeff_log, dtype=jnp.float32),
+        cross_sections=jnp.asarray(kcoeff_log),
     )
 
 
@@ -248,7 +248,7 @@ def _load_ck_npz(index: int, spec, path: str, obs: dict, use_full_grid: bool = F
         wavelengths=jnp.asarray(wavelengths),
         g_points=jnp.asarray(g_points),
         g_weights=jnp.asarray(g_weights),
-        cross_sections=jnp.asarray(cross_section, dtype=jnp.float32),
+        cross_sections=jnp.asarray(cross_section),
     )
 
 
@@ -369,6 +369,7 @@ def load_ck_registry(cfg, obs, lam_master: Optional[np.ndarray] = None):
         return
 
     # Store all the data as global scope caches - stack using JAX
+    # Cast to float32 at the end to save GPU memory (even with jax_enable_x64=True)
     _CK_SIGMA_CACHE = jnp.stack([entry.cross_sections for entry in _CK_ENTRIES], axis=0)
     _CK_TEMPERATURE_CACHE = jnp.stack([entry.temperatures for entry in _CK_ENTRIES], axis=0)
     _CK_G_POINTS_CACHE = jnp.stack([entry.g_points for entry in _CK_ENTRIES], axis=0)

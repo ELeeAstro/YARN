@@ -166,6 +166,7 @@ def build_forward_model(cfg, obs, return_highres: bool = False):
     wl_hi_array = np.asarray(XS.master_wavelength_cut(), dtype=float)
     wl_hi = jnp.asarray(wl_hi_array)
 
+    @jax.jit
     def forward_model(params: Dict[str, jnp.ndarray]) -> jnp.ndarray:
 
         # Merge fixed (delta) parameters with varying parameters

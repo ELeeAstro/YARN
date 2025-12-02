@@ -53,7 +53,7 @@ def compute_ray_opacity(state: Dict[str, jnp.ndarray], params: Dict[str, jnp.nda
         raise ValueError("Rayleigh wavelength grid must match forward-model grid.")
 
     sigma_log = XR.ray_sigma_table()
-    sigma_values = jnp.power(10.0, sigma_log.astype(jnp.float64))
+    sigma_values = 10.0**sigma_log
     species_names = XR.ray_species_names()
 
     # Direct lookup - species names must match VMR keys exactly

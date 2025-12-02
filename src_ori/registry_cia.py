@@ -125,7 +125,7 @@ def _load_cia_npz(index: int, path: str, target_wavelengths: np.ndarray) -> CiaR
         idx=index,
         temperatures=jnp.asarray(temperatures),
         wavelengths=jnp.asarray(target_wavelengths),
-        cross_sections=jnp.asarray(xs_interp, dtype=jnp.float32),
+        cross_sections=jnp.asarray(xs_interp),
     )
 
 # Pad the tables to a rectangle (in dimension) - usually only in T as wavelength grids are the same lengths
@@ -203,7 +203,7 @@ def _build_hminus_cia_entry(index: int, target_wavelengths: np.ndarray, spec) ->
         idx=index,
         temperatures=jnp.asarray(T),
         wavelengths=jnp.asarray(lam),
-        cross_sections=jnp.asarray(log10_sigma, dtype=jnp.float32),
+        cross_sections=jnp.asarray(log10_sigma),
     )
 
 
@@ -239,6 +239,7 @@ def load_cia_registry(cfg, obs, lam_master: Optional[np.ndarray] = None) -> None
         return
     
     # Add the data to the global caches using JAX and stack them
+    # Cast to float32 at the end to save GPU memory (even with jax_enable_x64=True)
     _CIA_SIGMA_CACHE = jnp.stack([entry.cross_sections for entry in _CIA_ENTRIES], axis=0)
     _CIA_TEMPERATURE_CACHE = jnp.stack([entry.temperatures for entry in _CIA_ENTRIES], axis=0)
 
