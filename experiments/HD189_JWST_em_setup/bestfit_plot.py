@@ -101,7 +101,7 @@ def _load_observed(exp_dir: Path, cfg):
 
     Priority:
       1) observed_data.csv in exp_dir (from save_observed_data_csv)
-      2) cfg.obs.path (raw data file; flexible column handling)
+      2) cfg.data.obs (new) or legacy cfg.obs.path
     """
     csv_path = exp_dir / "observed_data.csv"
     if csv_path.exists():
@@ -120,14 +120,18 @@ def _load_observed(exp_dir: Path, cfg):
         return lam, dlam, y, dy, resp
 
     # Fall back to raw obs file from YAML
-    obs_cfg = getattr(cfg, "obs", None)
-    if obs_cfg is None or not getattr(obs_cfg, "path", None):
+    data_cfg = getattr(cfg, "data", None)
+    obs_path = getattr(data_cfg, "obs", None) if data_cfg is not None else None
+    if obs_path is None:
+        obs_cfg = getattr(cfg, "obs", None)
+        obs_path = getattr(obs_cfg, "path", None) if obs_cfg is not None else None
+    if obs_path is None:
         raise FileNotFoundError(
-            "No observed_data.csv in experiment directory and cfg.obs.path missing. "
+            "No observed_data.csv in experiment directory and cfg.data.obs/cfg.obs.path missing. "
             "Cannot load observed data."
         )
 
-    data_path = _resolve_path_relative(obs_cfg.path, exp_dir)
+    data_path = _resolve_path_relative(obs_path, exp_dir)
     if not data_path.exists():
         raise FileNotFoundError(f"Could not find data file: {data_path}")
 

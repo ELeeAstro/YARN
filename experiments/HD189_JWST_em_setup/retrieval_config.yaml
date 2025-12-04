@@ -1,0 +1,122 @@
+data:
+
+  obs: ../../obs_data/HD189733b_emission_JWST.txt
+  stellar: ./HD189_stellar.txt
+  janaf: ../../JANAF_data/
+
+physics:
+
+  nlay: 99
+
+  vert_Tp: Guillot
+  vert_alt: p_ref
+  vert_chem: rate_CE
+  vert_mu: dynamic
+
+  opac_line: lbl
+  opac_ray: lbl
+  opac_cia: lbl
+  opac_cloud: None
+
+  rt_scheme: emission_1d
+
+opac:
+
+  wl_master: wl_dnu_1.txt
+  full_grid: False
+  ck: False
+
+  line:
+    - {species: H2O, path: ../../opac_data/lbl/H2O_dnu_1.npz}     
+    - {species: CO, path: ../../opac_data/lbl/CO_dnu_1.npz} 
+    - {species: CO2, path: ../../opac_data/lbl/CO2_dnu_1.npz} 
+    - {species: CH4, path: ../../opac_data/lbl/CH4_dnu_1.npz}
+
+  ray:
+    - {species: H2}
+    - {species: He}
+  cia:
+    - {species: H2-H2, path: ../../opac_data/cia/H2-H2_2011.npz}
+    - {species: H2-He, path: ../../opac_data/cia/H2-He_2011.npz}
+  cloud: None
+
+params:
+
+
+  - { name: R_s,   dist: delta,   value: 0.765, transform: identity, init: 0.765}
+  - { name: p_bot, dist: delta,   value: 100.0,  transform: identity, init: 100.0 }
+  - { name: p_top, dist: delta,   value: 1e-6, transform: identity, init: 1e-6}
+  - { name: M_p, dist: delta,   value: 1.166, transform: identity, init: 1.166}
+  - { name: f_hem, dist: delta,   value: 0.25, transform: identity, init: 0.25}
+
+
+  - { name: log_10_p_ref, dist: uniform, low: -5,   high: 1.9,  transform: logit, init: 10.0}    
+  - { name: R_p, dist: uniform, low: 1.0,   high: 1.2,  transform: logit, init: 1.119}
+  - { name: T_int, dist: uniform, low: 250.0,   high: 600.0, transform: logit, init: 250.0 }
+  - { name: T_eq, dist: uniform, low: 500.0,   high: 2000.0, transform: logit, init: 1500.0 }
+  - { name: log_10_k_ir, dist: uniform, low: -9,   high: 9, transform: logit, init: 0 }
+  - { name: log_10_gam_v, dist: uniform, low: -6,   high: 2, transform: logit, init: 0 }
+
+  - { name: C/O, dist: uniform, low: 0,   high: 2,  transform: logit, init: 0}
+  - { name: M/H, dist: uniform, low: -1,   high: 3,  transform: logit, init: 0}
+
+  # - { name: log_10_f_H2O, dist: uniform, low: -9,   high: -1,  transform: logit, init: -5}
+  # - { name: log_10_f_CO, dist: uniform, low: -9,   high: -1,  transform: logit, init: -5}
+  # - { name: log_10_f_CO2, dist: uniform, low: -9,   high: -1,  transform: logit, init: -5}
+  # - { name: log_10_f_CH4, dist: uniform, low: -9,   high: -1,  transform: logit, init: -5}
+
+
+sampling:
+
+  engine: jaxns
+
+  nuts:
+    backend: numpyro
+    warmup: 100
+    draws: 100
+    seed: 42
+    chains: 1
+
+  jaxns:
+    # ---- core NS config ----
+    max_samples: 100000          # hard cap on nested-sampling iterations
+    num_live_points: 100        # live points (posterior resolution)
+
+    # Slice sampler hyperparameters
+    s: 6                         # slices per dimension (default ~4)
+    k: 0                         # phantom samples (0 = off, >0 for hard posteriors)
+    c: null                       # parallel chains (null -> jaxns default, ~20*D)
+    shell_fraction: 0.5          # fraction of shell explored per step (0<sf<=1)
+
+    # Global behaviour flags
+    difficult_model: false       # robust defaults for gnarly posteriors
+    parameter_estimation: true   # tune for good posterior, not just evidence
+    gradient_guided: false       # use gradients for proposals (only if stable)
+    init_efficiency_threshold: 0.1  # >0: initial uniform sampling until eff>thr
+    verbose: true               # print textual progress to CLI
+
+    # ---- termination controls ----
+    termination:
+      ess: 10000                        # target effective sample size
+      evidence_uncert: null            # stop when σ_logZ < 0.3
+      dlogZ: 1.0                     # stop when remaining evidence small
+      max_samples: 100000             # safety cap for samples
+      max_num_likelihood_evaluations: null
+      rtol: null
+      atol: null
+
+    # ---- posterior handling ----
+    posterior_samples: 10000           # equal-weight posterior draws
+    seed: 42                          # RNG seed for JAX
+
+  blackjax_ns:
+    num_live_points: 150
+    num_inner_steps: 50
+    num_delete: 75
+    dlogz_stop: 0
+    seed: 42
+
+runtime:
+  platform: cpu           # cpu | gpu | cuda | metal
+  cuda_visible_devices: 0  # or "0,1"
+  threads: 1

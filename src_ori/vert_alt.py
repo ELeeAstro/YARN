@@ -82,7 +82,7 @@ def hypsometric_variable_g_pref(p_lev, T_lay, mu_lay, params):
     log_g = jnp.asarray(params["log_g"])
     R0 = jnp.asarray(params["R_p"]) * R_jup
     g_ref = 10.0 ** log_g
-    p_ref = jnp.asarray(params["p_ref"]) * bar
+    p_ref = jnp.asarray(params["log_10_p_ref"]) * bar
 
     nlev = p_lev.shape[0]
     dlnp = jnp.log(p_lev[:-1] / p_lev[1:])

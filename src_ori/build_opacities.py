@@ -203,16 +203,16 @@ def build_opacities(cfg, obs, exp_dir: Optional[Path] = None):
         # Check that ck species list exists
         ck_species = getattr(opac_cfg, "line", None) if opac_cfg is not None else None
         if ck_species is not None and ck_species not in (None, "None", "none", True, False):
-            load_ck_registry(cfg, obs, lam_master=lam_master_cut)
+            load_ck_registry(cfg, obs, lam_master=lam_master_cut, base_dir=exp_dir)
     else:
         # Load line-by-line opacities
         print("[info] Using line-by-line (lbl) opacities")
         if opac_cfg is not None and getattr(opac_cfg, "line", None) not in (None, "None", "none"):
-            load_line_registry(cfg, obs, lam_master=lam_master_cut)
+            load_line_registry(cfg, obs, lam_master=lam_master_cut, base_dir=exp_dir)
 
     # Load CIA and Rayleigh opacities (same for both ck and lbl)
     if opac_cfg is not None and getattr(opac_cfg, "cia", None) not in (None, "None"):
-        load_cia_registry(cfg, obs, lam_master=lam_master_cut)
+        load_cia_registry(cfg, obs, lam_master=lam_master_cut, base_dir=exp_dir)
     if opac_cfg is not None and getattr(opac_cfg, "ray", None) not in (None, "None"):
         load_ray_registry(cfg, obs, lam_master=lam_master_cut)
 

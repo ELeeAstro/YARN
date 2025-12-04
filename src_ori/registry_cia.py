@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import List, Tuple, Optional
+from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
@@ -208,7 +209,7 @@ def _build_hminus_cia_entry(index: int, target_wavelengths: np.ndarray, spec) ->
 
 
 # Load in the CIA table data - add the data to global scope cache files
-def load_cia_registry(cfg, obs, lam_master: Optional[np.ndarray] = None) -> None:
+def load_cia_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_dir: Optional[Path] = None) -> None:
 
     # Initialise the global caches
     global _CIA_ENTRIES, _CIA_SIGMA_CACHE, _CIA_TEMPERATURE_CACHE
@@ -228,8 +229,15 @@ def load_cia_registry(cfg, obs, lam_master: Optional[np.ndarray] = None) -> None
             print("[CIA] Computing CIA xs for", name, "on master grid")
             entry = _build_hminus_cia_entry(index, wavelengths, spec)
         else:
-            print("[CIA] Reading cia xs for", name, "@", spec.path)
-            entry = _load_cia_npz(index, spec.path, wavelengths)
+            cia_path = Path(spec.path).expanduser()
+            if not cia_path.is_absolute():
+                if base_dir is not None:
+                    cia_path = (Path(base_dir) / cia_path).resolve()
+                else:
+                    cia_path = cia_path.resolve()
+            path_str = str(cia_path)
+            print("[CIA] Reading cia xs for", name, "@", path_str)
+            entry = _load_cia_npz(index, path_str, wavelengths)
         entries.append(entry)
 
     # For JAX, need to pad to make the tables rectangular with the same nummber of T grids 

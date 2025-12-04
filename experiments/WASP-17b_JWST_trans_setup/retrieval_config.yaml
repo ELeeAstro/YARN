@@ -1,6 +1,7 @@
-obs:
+data:
 
   path: ../obs_data/WASP-17b_JWST.txt
+  stellar: ./
 
 physics:
 

@@ -126,7 +126,7 @@ def _solve_alpha_eaa(
     lw_down_sum = jnp.zeros((nlev, nwl))
     be_internal = jnp.asarray(be_internal)
 
-    mask = g_phase >= 1.0e-6
+    mask = g_phase >= 1.0e-4
     fc = jnp.where(mask, g_phase**nstreams, 0.0)
     pmom2 = jnp.where(mask, g_phase**(nstreams + 1), 0.0)
     ratio = jnp.maximum((fc**2) / jnp.maximum(pmom2**2, 1.0e-30), 1.0e-30)
@@ -137,7 +137,7 @@ def _solve_alpha_eaa(
     )
     c = jnp.exp((nstreams**2) / (2.0 * sigma_sq))
     fc_scaled = c * fc
-    w_in = jnp.clip(ssa, 0.0, 0.95)
+    w_in = jnp.clip(ssa, 0.0, 0.99)
     denom = jnp.maximum(1.0 - fc_scaled * w_in, 1.0e-12)
     w0 = jnp.where(mask, w_in * ((1.0 - fc_scaled) / denom), w_in)
     dtau = jnp.where(mask, (1.0 - w_in * fc_scaled) * dtau_layers, dtau_layers)
@@ -147,21 +147,20 @@ def _solve_alpha_eaa(
 
     for mu, weight in zip(_MU_NODES, _MU_WEIGHTS):
         T_trans = jnp.exp(-dtau_a / mu)
+        mu_over_dtau = mu / jnp.maximum(dtau_a, _DT_SAFE)
 
         def down_body(k, lw):
-            dtau_k = dtau_a[k]
-            mu_over_dtau = mu / jnp.maximum(dtau_k, _DT_SAFE)
             linear = (
                 lw[k] * T_trans[k]
                 + be_levels[k + 1]
-                - al[k] * mu_over_dtau
-                - (be_levels[k] - al[k] * mu_over_dtau) * T_trans[k]
+                - al[k] * mu_over_dtau[k]
+                - (be_levels[k] - al[k] * mu_over_dtau[k]) * T_trans[k]
             )
             iso = (
                 lw[k] * T_trans[k]
                 + 0.5 * (be_levels[k] + be_levels[k + 1]) * (1.0 - T_trans[k])
             )
-            mask_dt = dtau_k > _DT_THRESHOLD
+            mask_dt = dtau_a[k] > _DT_THRESHOLD
             next_val = jnp.where(mask_dt, linear, iso)
             return lw.at[k + 1].set(next_val)
 
@@ -170,19 +169,17 @@ def _solve_alpha_eaa(
 
         def up_body(idx, lw):
             k = nlay - 1 - idx
-            dtau_k = dtau_a[k]
-            mu_over_dtau = mu / jnp.maximum(dtau_k, _DT_SAFE)
             linear = (
                 lw[k + 1] * T_trans[k]
                 + be_levels[k]
-                + al[k] * mu_over_dtau
-                - (be_levels[k + 1] + al[k] * mu_over_dtau) * T_trans[k]
+                + al[k] * mu_over_dtau[k]
+                - (be_levels[k + 1] + al[k] * mu_over_dtau[k]) * T_trans[k]
             )
             iso = (
                 lw[k + 1] * T_trans[k]
                 + 0.5 * (be_levels[k] + be_levels[k + 1]) * (1.0 - T_trans[k])
             )
-            mask_dt = dtau_k > _DT_THRESHOLD
+            mask_dt = dtau_a[k] > _DT_THRESHOLD
             next_val = jnp.where(mask_dt, linear, iso)
             return lw.at[k].set(next_val)
 
@@ -290,10 +287,14 @@ def _scale_flux_ratio(
     state: Dict[str, jnp.ndarray],
     params: Dict[str, jnp.ndarray],
 ) -> jnp.ndarray:
-    if "F_star" not in params:
-        raise ValueError("compute_emission_spectrum_1d requires parameter 'F_star'.")
+    stellar_flux = state.get("stellar_flux")
+    if stellar_flux is not None:
+        F_star = jnp.asarray(stellar_flux, dtype=jnp.float64)
+    else:
+        if "F_star" not in params:
+            raise ValueError("compute_emission_spectrum_1d requires stellar_flux or parameter 'F_star'.")
+        F_star = jnp.asarray(params["F_star"], dtype=jnp.float64)
     R0 = jnp.asarray(state["R0"], dtype=jnp.float64)
     R_s = jnp.asarray(state["R_s"], dtype=jnp.float64)
-    F_star = jnp.asarray(params["F_star"], dtype=jnp.float64)
     scale = (R0**2) / (jnp.maximum(F_star, 1.0e-30) * (R_s**2))
     return flux * scale

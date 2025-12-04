@@ -1,6 +1,7 @@
-obs:
+data:
 
   path: ../obs_data/HD209458b_transmission_Sing2016.txt
+  stellar: ./
 
 physics:
 

@@ -17,7 +17,7 @@ from data_constants import kb, amu, R_jup, R_sun, bar, G, M_jup
 
 from vert_alt import hypsometric, hypsometric_variable_g, hypsometric_variable_g_pref
 from vert_Tp import isothermal, Milne, Guillot, Line, Barstow
-from vert_chem import constant_vmr, chemical_equilibrium
+from vert_chem import constant_vmr, chemical_equilibrium, CE_rate_jax
 from vert_mu import constant_mu, compute_mu
 
 from opacity_line import zero_line_opacity, compute_line_opacity
@@ -33,7 +33,7 @@ from RT_em_1D import compute_emission_spectrum_1d
 
 from instru_convolve import apply_response_functions
 
-def build_forward_model(cfg, obs, return_highres: bool = False):
+def build_forward_model(cfg, obs, stellar_flux=None, return_highres: bool = False):
 
     # Extract fixed (delta) parameters from cfg.params
     fixed_params = {}
@@ -94,6 +94,8 @@ def build_forward_model(cfg, obs, return_highres: bool = False):
         chemistry_kernel = constant_vmr
     elif vert_chem_name in ("ce", "chemical_equilibrium"):
         chemistry_kernel = chemical_equilibrium
+    elif vert_chem_name in ("rate_ce", "rate_jax", "ce_rate_jax"):
+        chemistry_kernel = CE_rate_jax
     else:
         raise NotImplementedError(f"Unknown chemistry scheme='{vert_chem_name}'")
 
@@ -185,6 +187,9 @@ def build_forward_model(cfg, obs, return_highres: bool = False):
     # High-resolution master grid (must match cut_grid used in bandpass loader)
     wl_hi_array = np.asarray(XS.master_wavelength_cut(), dtype=float)
     wl_hi = jnp.asarray(wl_hi_array)
+    stellar_flux_arr = None
+    if stellar_flux is not None:
+        stellar_flux_arr = jnp.asarray(stellar_flux, dtype=jnp.float64)
 
     @jax.jit
     def forward_model(params: Dict[str, jnp.ndarray]) -> jnp.ndarray:
@@ -255,6 +260,10 @@ def build_forward_model(cfg, obs, return_highres: bool = False):
             "nd_lay": nd_lay,
             "vmr_lay": vmr_lay,
         }
+        if stellar_flux_arr is not None:
+            state["stellar_flux"] = stellar_flux_arr
+        if "F_star" in params or "F_star" in full_params:
+            state["F_star"] = jnp.asarray(full_params.get("F_star", params.get("F_star")))
         if g_weights is not None:
             state["g_weights"] = g_weights
 

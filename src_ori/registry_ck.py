@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import List, Tuple, Optional, Any
+from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
@@ -321,7 +322,7 @@ def _rectangularize_entries(entries: List[CKRegistryEntry]) -> Tuple[CKRegistryE
 
 
 # Read in and prepare the correlated-k data
-def load_ck_registry(cfg, obs, lam_master: Optional[np.ndarray] = None):
+def load_ck_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_dir: Optional[Path] = None):
 
     # Allocate the global scope caches
     global _CK_ENTRIES, _CK_SIGMA_CACHE, _CK_TEMPERATURE_CACHE, _CK_G_POINTS_CACHE, _CK_G_WEIGHTS_CACHE
@@ -350,16 +351,22 @@ def load_ck_registry(cfg, obs, lam_master: Optional[np.ndarray] = None):
 
     # Read in the c-k data for each species given by the YAML file - add to the entries list
     for index, spec in enumerate(config):
-        path = spec.path
-        print("[c-k] Reading correlated-k xs for", spec.species, "@", path)
+        path = Path(spec.path).expanduser()
+        if not path.is_absolute():
+            if base_dir is not None:
+                path = (Path(base_dir) / path).resolve()
+            else:
+                path = path.resolve()
+        path_str = str(path)
+        print("[c-k] Reading correlated-k xs for", spec.species, "@", path_str)
 
         # Check file format
-        if path.endswith(".npz"):
-            entry = _load_ck_npz(index, spec, path, obs, use_full_grid=use_full_grid)
-        elif path.endswith('.h5') or path.endswith('.hdf5'):
-            entry = _load_ck_h5(index, spec, path, obs, use_full_grid=use_full_grid)
+        if path_str.endswith(".npz"):
+            entry = _load_ck_npz(index, spec, path_str, obs, use_full_grid=use_full_grid)
+        elif path_str.endswith('.h5') or path_str.endswith('.hdf5'):
+            entry = _load_ck_h5(index, spec, path_str, obs, use_full_grid=use_full_grid)
         else:
-            raise ValueError(f"Unsupported file format for {path}. Expected .npz, .h5 or .hdf5")
+            raise ValueError(f"Unsupported file format for {path_str}. Expected .npz, .h5 or .hdf5")
         entries.append(entry)
 
     # Now need to pad in the temperature and g dimensions to make all grids to the same size (for JAX)

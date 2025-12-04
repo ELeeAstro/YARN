@@ -121,15 +121,20 @@ def run_nested_blackjax(cfg, prep: Prepared, exp_dir: Path) -> Tuple[Dict[str, n
     lam   = jnp.asarray(prep.lam)
     dlam  = jnp.asarray(prep.dlam)
     y_obs = jnp.asarray(prep.y)
-    dy_obs = jnp.asarray(prep.dy)
+    dy_obs_p = jnp.asarray(prep.dy_p)
+    dy_obs_m = jnp.asarray(prep.dy_m)
 
     @jax.jit
     def loglikelihood_fn(params):
         mu = prep.fm(params)  # (N_obs,)
         mu = jnp.asarray(mu)  # Ensure float64
-        sig = dy_obs
-        r = (y_obs - mu) / sig
-        loglike = -0.5 * jnp.sum(r * r + jnp.log(2 * jnp.pi) + 2 * jnp.log(sig))
+        res = y_obs - mu
+        sig = jnp.where(res >= 0.0, dy_obs_p, dy_obs_m)
+        sig = jnp.clip(sig, 1e-300, jnp.inf)
+        norm = jnp.clip(dy_obs_p + dy_obs_m, 1e-300, jnp.inf)
+        r = res / sig
+        logC = 0.5 * jnp.log(2.0 / jnp.pi) - jnp.log(norm)
+        loglike = jnp.sum(logC - 0.5 * (r * r))
         return jnp.asarray(loglike)
 
     nested_sampler = blackjax.nss(

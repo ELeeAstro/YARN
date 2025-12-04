@@ -41,7 +41,8 @@ def make_jaxns_model(cfg, prep: Prepared) -> Model:
     lam   = jnp.asarray(prep.lam)
     dlam  = jnp.asarray(prep.dlam)
     y_obs = jnp.asarray(prep.y)
-    dy_obs = jnp.asarray(prep.dy)
+    dy_obs_p = jnp.asarray(prep.dy_p)
+    dy_obs_m = jnp.asarray(prep.dy_m)
 
     # Only sample non-delta parameters; fixed values are injected inside the forward model.
     params_cfg = [
@@ -89,17 +90,21 @@ def make_jaxns_model(cfg, prep: Prepared) -> Model:
         # Whatever we return here is what the likelihood gets as `params`
         return params
 
-    # ----- Gaussian log-likelihood using prep.predict_fn -----
+    # ----- Split-normal (asymmetric Gaussian) log-likelihood -----
     def log_likelihood(theta_map: Dict[str, jnp.ndarray]) -> jnp.ndarray:
-        """
-        theta_map is exactly what prior_model() returned:
-        only sampled parameters (fixed/delta values live inside the forward model).
-        """
-        # predict_fn already knows lam, dlam etc. according to Prepared
         mu = prep.fm(theta_map)  # (N_obs,)
-        sig = jnp.clip(dy_obs, 1e-300, jnp.inf)
-        r = (y_obs - mu) / sig
-        return -0.5 * jnp.sum(r * r + jnp.log(2 * jnp.pi) + 2 * jnp.log(sig))
+
+        res = y_obs - mu
+
+        # choose sigma depending on which side y_obs lies relative to mu
+        sig = jnp.where(res >= 0.0, dy_obs_p, dy_obs_m)
+
+        # split-normal normalization: sqrt(2/pi) / (dy_minus + dy_plus)
+        sig = jnp.clip(sig, 1e-300, jnp.inf)
+        norm = jnp.clip(dy_obs_m + dy_obs_p, 1e-300, jnp.inf)
+        logC = 0.5 * jnp.log(2.0 / jnp.pi) - jnp.log(norm)
+
+        return jnp.sum(logC - 0.5 * (res / sig) ** 2)
 
     return Model(prior_model=prior_model, log_likelihood=log_likelihood)
 

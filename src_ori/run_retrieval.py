@@ -91,7 +91,18 @@ def main():
 
     # Load the observational data - return a dictionary obs
     from read_obs import read_obs_data
-    obs = read_obs_data(cfg.obs.path)
+    from read_stellar import read_stellar_spectrum
+    data_cfg = getattr(cfg, "data", None)
+    rel_obs_path = None
+    if data_cfg is not None:
+        rel_obs_path = getattr(data_cfg, "obs", None)
+    if rel_obs_path is None:
+        obs_cfg = getattr(cfg, "obs", None)
+        if obs_cfg is not None:
+            rel_obs_path = getattr(obs_cfg, "path", None)
+    if rel_obs_path is None:
+        raise ValueError("No observational data path found. Set cfg.data.obs (or legacy cfg.obs.path).")
+    obs = read_obs_data(rel_obs_path, base_dir=exp_dir)
 
     # Load the opacities (if present in YAML file)
     from build_opacities import build_opacities, master_wavelength, master_wavelength_cut
@@ -109,9 +120,47 @@ def main():
     from registry_bandpass import load_bandpass_registry
     load_bandpass_registry(obs, full_grid, cut_grid)
 
+    # Load Gibbs free energy tables for chemical equilibrium (if using rate_jax)
+    phys = getattr(cfg, "physics", None)
+    if phys is not None:
+        vert_chem_raw = getattr(phys, "vert_chem", None)
+        if vert_chem_raw is not None:
+            vert_chem_name = str(vert_chem_raw).lower()
+            if vert_chem_name in ("rate_ce", "rate_jax", "ce_rate_jax"):
+                from rate_jax import load_gibbs_cache, is_gibbs_cache_loaded
+
+                # Only load if not already cached
+                if not is_gibbs_cache_loaded():
+                    # Get JANAF path from cfg.data.janaf
+                    data_cfg = getattr(cfg, "data", None)
+                    if data_cfg is not None:
+                        janaf_rel_path = getattr(data_cfg, "janaf", None)
+                    else:
+                        janaf_rel_path = None
+
+                    if janaf_rel_path is None:
+                        raise ValueError(
+                            "JANAF data path not found in config. Please add 'janaf: path/to/JANAF_data' "
+                            "under 'data:' section in your YAML config."
+                        )
+
+                    # Resolve path relative to experiment directory
+                    if not Path(janaf_rel_path).is_absolute():
+                        janaf_path = str(exp_dir / janaf_rel_path)
+                    else:
+                        janaf_path = janaf_rel_path
+
+                    print(f"[info] Loading Gibbs free energy tables from {janaf_path}")
+                    gibbs = load_gibbs_cache(janaf_path)
+                    print(f"[info] Gibbs cache loaded: {len(gibbs.data)} species")
+                else:
+                    print("[info] Gibbs cache already loaded")
+
     # Build the forward model from the YAML options - return a function that samplers can use
     from build_model import build_forward_model
-    fm_fnc = build_forward_model(cfg, obs)
+    stellar_flux = read_stellar_spectrum(cfg, cut_grid, bool(cfg.opac.ck), base_dir=exp_dir)
+
+    fm_fnc = build_forward_model(cfg, obs, stellar_flux=stellar_flux)
 
     # Prepare the main dataclass required for all samplers and forward model
     from build_prepared import build_prepared

@@ -73,8 +73,8 @@ def Milne(p_lev: jnp.ndarray, params: Dict[str, jnp.ndarray]):
 def Guillot(p_lev: jnp.ndarray, params: Dict[str, jnp.ndarray]):
     T_int = jnp.asarray(params["T_int"])
     T_eq = jnp.asarray(params["T_eq"])
-    k_ir = jnp.asarray(params["k_ir"])
-    gam = jnp.asarray(params["gam_v"])
+    k_ir = 10.0**jnp.asarray(params["log_10_k_ir"])
+    gam = 10.0**jnp.asarray(params["log_10_gam_v"])
     log_g = jnp.asarray(params["log_g"])
     f = jnp.asarray(params["f_hem"])
     T_irr = T_eq * jnp.sqrt(2.0)

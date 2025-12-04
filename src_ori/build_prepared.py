@@ -145,6 +145,8 @@ class Prepared:
     dlam: jnp.ndarray
     y: jnp.ndarray
     dy: jnp.ndarray
+    dy_p: jnp.ndarray
+    dy_m: jnp.ndarray
     fm: Callable[[Dict[str, jnp.ndarray]], jnp.ndarray]
 
     def unpack(self, u_vec: jnp.ndarray) -> Dict[str, jnp.ndarray]:
@@ -210,17 +212,23 @@ def make_loglik_only(prep: Prepared):
     dlam = prep.dlam
     y = prep.y
     dy = prep.dy
+    dy_p = prep.dy_p
+    dy_m = prep.dy_m
     fm = prep.fm
 
     def loglik_theta(theta_map: Dict[str, jnp.ndarray]):
         mu = fm(theta_map)
-        sig = jnp.clip(dy, 1e-300, jnp.inf)
+        res = y - mu
+        sig = jnp.where(res >= 0.0, dy_p, dy_m)
+        sig = jnp.clip(sig, 1e-300, jnp.inf)
         is_finite = jnp.all(jnp.isfinite(mu))
 
         def _ok(_):
-            r = (y - mu) / sig
+            norm = jnp.clip(dy_p + dy_m, 1e-300, jnp.inf)
+            r = res / sig
             r = jnp.where(jnp.isfinite(r), r, 0.0)
-            return -0.5 * jnp.sum(r * r + jnp.log(2 * jnp.pi) + 2 * jnp.log(sig))
+            logC = 0.5 * jnp.log(2.0 / jnp.pi) - jnp.log(norm)
+            return jnp.sum(logC - 0.5 * (r * r))
 
         def _bad(_):
             return -jnp.inf
@@ -312,6 +320,8 @@ def build_prepared(
     dlam = jnp.asarray(obs["dwl"])
     y = jnp.asarray(obs["y"])
     dy = jnp.asarray(obs["dy"])
+    dy_p = jnp.asarray(obs.get("dy_plus", obs["dy"]))
+    dy_m = jnp.asarray(obs.get("dy_minus", obs["dy"]))
 
     def _unpack_all(u_vec: jnp.ndarray) -> Dict[str, jnp.ndarray]:
         values = {names_tuple[i]: bijectors_tuple[i].forward(u_vec[i]) for i in range(len(names_tuple))}
@@ -321,13 +331,17 @@ def build_prepared(
     def loglik_u(u_vec: jnp.ndarray) -> jnp.ndarray:
         pars = _unpack_all(u_vec)
         mu = fm(pars)
-        sig = jnp.clip(dy, 1e-300, jnp.inf)
+        res = y - mu
+        sig = jnp.where(res >= 0.0, dy_p, dy_m)
+        sig = jnp.clip(sig, 1e-300, jnp.inf)
         is_finite = jnp.all(jnp.isfinite(mu))
 
         def _ok(_):
-            r = (y - mu) / sig
+            norm = jnp.clip(dy_p + dy_m, 1e-300, jnp.inf)
+            r = res / sig
             r = jnp.where(jnp.isfinite(r), r, 0.0)
-            return -0.5 * jnp.sum(r * r + jnp.log(2 * jnp.pi) + 2 * jnp.log(sig))
+            logC = 0.5 * jnp.log(2.0 / jnp.pi) - jnp.log(norm)
+            return jnp.sum(logC - 0.5 * (r * r))
 
         def _bad(_):
             return -jnp.inf
@@ -358,5 +372,7 @@ def build_prepared(
         dlam=dlam,
         y=y,
         dy=dy,
+        dy_p=dy_p,
+        dy_m=dy_m,
         fm=fm,
     )
