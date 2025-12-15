@@ -59,36 +59,37 @@ def _sum_opacity_components_ck(
         return jnp.zeros((nlay, nwl, ng))
 
     line_opacity = opacity_components.get("line")
-
-    if line_opacity is not None:
-        k_tot = line_opacity
-    else:
+    if line_opacity is None:
         g_weights = _get_ck_weights(state)
         ng = g_weights.shape[-1]
-        k_tot = jnp.zeros((nlay, nwl, ng))
+        line_opacity = jnp.zeros((nlay, nwl, ng))
 
-    for name, component in opacity_components.items():
-        if name != "line":
-            k_tot = k_tot + component[:, :, None]
+    zeros_2d = jnp.zeros((nlay, nwl), dtype=line_opacity.dtype)
+    component_keys_2d = ("rayleigh", "cia", "special", "cloud")
+    components_2d = jnp.stack([opacity_components.get(k, zeros_2d) for k in component_keys_2d], axis=0)
+    summed_2d = jnp.sum(components_2d, axis=0)
 
-    return k_tot
+    return line_opacity + summed_2d[:, :, None]
 
 
 def _sum_opacity_components_lbl(
     state: Dict[str, jnp.ndarray],
     opacity_components: Mapping[str, jnp.ndarray],
 ) -> jnp.ndarray:
-    if opacity_components:
-        first = next(iter(opacity_components.values()))
-        k_tot = jnp.zeros_like(first)
-        for component in opacity_components.values():
-            k_tot = k_tot + component
-    else:
-        nlay = int(state["nlay"])
-        nwl = int(state["nwl"])
-        k_tot = jnp.zeros((nlay, nwl))
+    nlay = int(state["nlay"])
+    nwl = int(state["nwl"])
 
-    return k_tot
+    if not opacity_components:
+        return jnp.zeros((nlay, nwl))
+
+    component_keys = ("line", "rayleigh", "cia", "special", "cloud")
+    first = next((opacity_components.get(k) for k in component_keys if k in opacity_components), None)
+    if first is None:
+        return jnp.zeros((nlay, nwl))
+
+    zeros = jnp.zeros_like(first)
+    stacked = jnp.stack([opacity_components.get(k, zeros) for k in component_keys], axis=0)
+    return jnp.sum(stacked, axis=0)
 
 
 def _planck_lambda(wavelength_cm: jnp.ndarray, temperature: jnp.ndarray) -> jnp.ndarray:
@@ -227,11 +228,16 @@ def compute_emission_spectrum_1d(
         ssa_by_g = jnp.moveaxis(ssa_ck, -1, 0)
         g_by_g = jnp.moveaxis(g_ck, -1, 0)
 
-        def _solve_one(dtau_slice, ssa_slice, g_slice):
-            return _solve_alpha_eaa(be_levels, dtau_slice, ssa_slice, g_slice, be_internal)
+        g_weights = g_weights[: dtau_by_g.shape[0]]
 
-        flux_up_g, _ = jax.vmap(_solve_one)(dtau_by_g, ssa_by_g, g_by_g)
-        lw_up = jnp.sum(g_weights[:, None, None] * flux_up_g, axis=0)
+        def _scan_body(lw_up_accum, inputs):
+            dtau_slice, ssa_slice, g_slice, weight = inputs
+            lw_up_g, _ = _solve_alpha_eaa(be_levels, dtau_slice, ssa_slice, g_slice, be_internal)
+            lw_up_accum = lw_up_accum + jnp.asarray(weight, dtype=lw_up_accum.dtype) * lw_up_g
+            return lw_up_accum, None
+
+        lw_up_init = jnp.zeros_like(be_levels)
+        lw_up, _ = lax.scan(_scan_body, lw_up_init, (dtau_by_g, ssa_by_g, g_by_g, g_weights))
     else:
         k_tot = _sum_opacity_components_lbl(state, opacity_components)
         ssa_lbl, g_lbl = _compute_scattering_properties(
@@ -244,11 +250,9 @@ def compute_emission_spectrum_1d(
         lw_up, _ = _solve_alpha_eaa(be_levels, dtau_lbl, ssa_lbl, g_lbl, be_internal)
 
     top_flux = lw_up[0]
-    emission_mode = str(state.get("emission_mode", "planet")).lower().replace(" ", "_")
-    if emission_mode in ("brown_dwarf", "browndwarf", "bd"):
+    if bool(state.get("is_brown_dwarf", False)):
         return top_flux
-    flux_ratio = _scale_flux_ratio(top_flux, state, params)
-    return flux_ratio
+    return _scale_flux_ratio(top_flux, state, params)
 
 
 def _compute_scattering_properties(

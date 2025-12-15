@@ -1,6 +1,6 @@
 data:
 
-  obs: ../../obs_data/HD209458b_transmission_Sing2016.txt
+  obs: ../../obs_data/HD189733b_transmission_Sing2016.txt
   stellar: None
   janaf: ../../JANAF_data/
 
@@ -8,69 +8,71 @@ physics:
 
   nlay: 99
 
+
   vert_Tp: Barstow
   vert_alt: variable_g
   vert_chem: constant_vmr
   vert_mu: dynamic
 
-  opac_line: lbl
-  opac_ray: lbl
-  opac_cia: lbl
-  opac_cloud: F18
+  opac_line: ck
+  opac_ray: None
+  opac_cia: None
+  opac_cloud: powerlaw_cloud
 
   rt_scheme: transit_1d
 
 opac:
 
-  wl_master: wl_dnu_1.txt
-  #wl_master: wl_petitradtrans_R1000.txt
-  #wl_master: wl_taurex_R15000.txt 
-  full_grid: True
-  ck: False
+  #wl_master: wl_dnu_1.txt
+  wl_master: wl_petitradtrans_R1000.txt
+  #wl_master: wl_taurex_R15000.txt
+  full_grid: False
+  ck: True
   ck_mix: RORR
 
   line:
-    - {species: H2O, path: ../../opac_data/lbl/H2O_dnu_1.npz}
-    - {species: Na, path: ../../opac_data/lbl/Na_dnu_1.npz}  
-    - {species: K, path: ../../opac_data/lbl/K_dnu_1.npz}
-       #- {species: H2O, path: ../opac_data/ck/1H2-16O__POKAZATEL__R1000_0.3-50mu.ktable.petitRADTRANS.h5}
-       # - {species: Na, path: ../opac_data/ck/23Na__Kurucz-Na.R1000_0.3-50mu.ktable.petitRADTRANS.h5}
-       #- {species: K, path: ../opac_data/ck/39K__Kurucz-K.R1000_0.3-50mu.ktable.petitRADTRANS.h5}
+    # - {species: H2O, path: ../../opac_data/lbl/H2O_dnu_1.npz}
+    # - {species: Na, path: ../../opac_data/lbl/Na_dnu_1.npz}  
+    # - {species: K, path: ../../opac_data/lbl/K_dnu_1.npz}
+       - {species: H2O, path: ../../opac_data/ck/1H2-16O__POKAZATEL__R1000_0.3-50mu.ktable.petitRADTRANS.h5}
+       #- {species: Na, path: ../../opac_data/ck/23Na__Kurucz-Na.R1000_0.3-50mu.ktable.petitRADTRANS.h5}
+       #- {species: K, path: ../../opac_data/ck/39K__Kurucz-K.R1000_0.3-50mu.ktable.petitRADTRANS.h5}
       #- {species: H2O, path: ../opac_data/lbl/1H2-16O__POKAZATEL__R15000_0.3-50mu.xsec.TauREx.h5}
       #- {species: Na, path: ../opac_data/lbl/23Na__Kurucz-Na.R15000_0.3-50mu.xsec.TauREx.h5}
       #- {species: K, path: ../opac_data/lbl/39K__Kurucz-K.R15000_0.3-50mu.xsec.TauREx.h5}        
 
-  ray:
-    - {species: H2}
-    - {species: He}
-  cia:
-    - {species: H2-H2, path: ../../opac_data/cia/H2-H2_2011.npz}
-    - {species: H2-He, path: ../../opac_data/cia/H2-He_2011.npz}
+  ray: None
+    #- {species: H2}
+    #- {species: He}
+  cia: None
+    #- {species: H2-H2, path: ../../opac_data/cia/H2-H2_2011.npz}
+    #- {species: H2-He, path: ../../opac_data/cia/H2-He_2011.npz}
   cloud: None
 
 params:
 
 
-  - { name: R_s,   dist: delta,   value: 1.18655, transform: identity, init: 1.18655}
+  - { name: R_s,   dist: delta,   value: 0.776484, transform: identity, init: 0.776484}
   - { name: p_bot, dist: delta,   value: 10.0,  transform: identity, init: 10.0 }
-  - { name: p_top, dist: delta,   value: 1e-8, transform: identity, init: 1e-8}
+  - { name: p_top, dist: delta,   value: 1e-5, transform: identity, init: 1e-5}
     #- { name: M_p, dist: delta,   value: 0.69, transform: identity, init: 0.69}
     #- { name: log_10_pref, dist: delta,   value: 1.0, transform: identity, init: 1.0}
     #- { name: log_10_p_ref, dist: uniform, low: -6,   high: 1.0,  transform: logit, init: 1}    
 
-  - { name: log_10_g, dist: normal, mu: 3.0 , sigma: 0.3,  transform: logit, init: 3.0}
-  - { name: R_p, dist: uniform, low: 1.1,   high: 1.5,  transform: logit, init: 1.4}
+  - { name: log_10_g, dist: uniform, low: 2.9 , high: 3.4,  transform: logit, init: 3.0}
+  - { name: R_p, dist: uniform, low: 0.9,   high: 1.3,  transform: logit, init: 1.0}
   - { name: T_iso, dist: uniform, low: 100.0,   high: 3000.0, transform: logit, init: 1500.0 }
   
-  - { name: log_10_f_H2O, dist: uniform, low: -8,   high: -2,  transform: logit, init: -5}
-  - { name: log_10_f_Na, dist: uniform, low: -9,   high: -3,  transform: logit, init: -6}
-  - { name: log_10_f_K, dist: uniform, low: -9,   high: -3,  transform: logit, init: -6}
+  - { name: log_10_f_H2O, dist: uniform, low: -8,   high: -2,  transform: logit, init: -4}
+  #- { name: log_10_f_Na, dist: uniform, low: -9,   high: -3,  transform: logit, init: -6}
+  #- { name: log_10_f_K, dist: uniform, low: -9,   high: -3,  transform: logit, init: -6}
 
-  - { name: f_cloud, dist: uniform, low: 0.0,   high: 1.0, transform: logit, init: 0.5}
-  - { name: log_10_q_c, dist: uniform, low: -9,   high: 1,  transform: logit, init: 0}    
-  - { name: log_10_cld_r, dist: uniform, low: -3,   high: 2,  transform: logit, init: 0}
-  - { name: cld_Q0, dist: uniform, low: 0.1,   high: 65,  transform: logit, init: 30.0}
-  - { name: cld_a, dist: uniform, low: 3.0,   high: 7.0,  transform: logit, init: 4.0}
+  # - { name: f_cloud, dist: uniform, low: 0.0,   high: 1.0, transform: logit, init: 0.5}
+
+  - { name: log_10_k_cld_grey, dist: uniform, low: -6.0, high: 6.0, transform: logit, init: -5.0}
+  - { name: log_10_k_cld_Ray, dist: uniform, low: -6.0, high: 6.0, transform: logit, init: -3.0}
+  - { name: alpha_cld, dist: uniform, low: 0.0, high: 6.0, transform: logit, init: 4.0}
+  - { name: wl_ref_cld, dist: delta, value: 1.0, transform: identity, init: 1.0}
 
 
 sampling:
@@ -80,17 +82,17 @@ sampling:
   nuts:
     backend: numpyro
     warmup: 100
-    draws: 100
+    draws: 200
     seed: 42
     chains: 1
 
   jaxns:
     # ---- core NS config ----
     max_samples: 100000          # hard cap on nested-sampling iterations
-    num_live_points: 1000        # live points (posterior resolution)
+    num_live_points: 100        # live points (posterior resolution)
 
     # Slice sampler hyperparameters
-    s: 6                         # slices per dimension (default ~4)
+    s: 4                         # slices per dimension (default ~4)
     k: 0                         # phantom samples (0 = off, >0 for hard posteriors)
     c: null                       # parallel chains (null -> jaxns default, ~20*D)
     shell_fraction: 0.5          # fraction of shell explored per step (0<sf<=1)
@@ -106,7 +108,7 @@ sampling:
     termination:
       ess: 10000                        # target effective sample size
       evidence_uncert: null            # stop when σ_logZ < 0.3
-      dlogZ: 0.01                     # stop when remaining evidence small
+      dlogZ: 1.0                     # stop when remaining evidence small
       max_samples: 100000             # safety cap for samples
       max_num_likelihood_evaluations: null
       rtol: null
@@ -117,9 +119,9 @@ sampling:
     seed: 42                          # RNG seed for JAX
 
   blackjax_ns:
-    num_live_points: 150
-    num_inner_steps: 50
-    num_delete: 75
+    num_live_points: 100
+    num_inner_steps: 18
+    num_delete: 50
     dlogz_stop: 0
     seed: 42
 

@@ -28,7 +28,7 @@ colors = sns.color_palette("colorblind")
 samples = read_chains("nested_samples.csv")
 
 # Define parameters to plot
-params = ['R_p', 'T_iso', 'log_10_f_H2O','log_10_f_Na','log_10_f_K','log_10_f_CO','log_10_f_CO2','log_10_f_CH4','log_10_f_H-']
+params = ['R_p', 'T_iso', 'log_10_f_H2O']
 
 # Configure plot types for each panel
 # Use kde_1d instead of hist_1d for line plots on diagonal
@@ -88,4 +88,3 @@ print("[corner] Saved corner_plot.png and corner_plot.pdf")
 
 # Show the plot
 plt.show()
-

@@ -1,17 +1,39 @@
 """
-vert_chem.py
-============
+Atmospheric Chemistry Profile Module
+=====================================
 
-Overview:
-    Vertical chemistry profiles for atmospheric models.
+This module provides functions for computing vertical chemical abundance profiles
+(volume mixing ratios) in planetary atmospheres. Various chemistry models are available,
+from simple constant abundances to full thermochemical equilibrium calculations.
 
-Notes:
+Functions
+---------
+constant_vmr : Generate constant volume mixing ratio profiles from parameters
+chemical_equilibrium : Placeholder for general chemical equilibrium (not yet implemented)
+CE_rate_jax : Compute chemical equilibrium profiles using RateJAX solver
+quench_approx : Compute quenched chemical abundance profiles (in development)
+
+Notes
+-----
+Species Naming Convention:
     Species names in config parameters (after stripping f_ or log_10_f_ prefix)
     must match opacity table species names exactly (including capitalization).
+    For example: 'H2O', 'CH4', 'CO2', 'NH3', etc.
 
-Sections to complete:
-    - Usage
-    - Key Functions
+Parameter Prefixes:
+    - 'f_' : Linear volume mixing ratio (e.g., 'f_H2O' = 1e-4)
+    - 'log_10_f_' : Log10 of volume mixing ratio (e.g., 'log_10_f_H2O' = -4.0)
+
+Background Atmosphere:
+    H2 and He abundances are automatically computed to fill the remaining atmosphere
+    after accounting for trace species, using solar H2/He ratio.
+
+Solar Reference Values:
+    Based on Asplund et al. (2021):
+    - O/H = 10^(8.69-12.0) = 4.9e-4
+    - C/H = 10^(8.46-12.0) = 2.88e-4
+    - N/H = 10^(7.83-12.0) = 6.76e-5
+    - He/H2 = 10^(10.914-12.0) = 0.082
 """
 
 from __future__ import annotations
@@ -39,10 +61,53 @@ def constant_vmr(
     nlay: int,
 ) -> Dict[str, jnp.ndarray]:
     """
-    Create constant VMR profiles from parameters.
+    Generate constant volume mixing ratio profiles from parameters.
 
-    Species names are taken directly from parameter keys after stripping prefixes.
-    User must ensure these match opacity table species names exactly.
+    Creates vertically uniform chemical abundance profiles where each species
+    has the same VMR throughout all atmospheric layers. H2 and He are automatically
+    added to fill the remaining atmosphere using the solar H2/He ratio.
+
+    Parameters
+    ----------
+    p_lay : jnp.ndarray
+        Layer pressures (nlay,) [bar]. Not used but kept for API consistency.
+    T_lay : jnp.ndarray
+        Layer temperatures (nlay,) [K]. Not used but kept for API consistency.
+    params : Dict[str, jnp.ndarray]
+        Dictionary of chemical abundance parameters. Keys should be:
+        - 'f_{species}' : Linear VMR (e.g., 'f_H2O': 1e-4)
+        - 'log_10_f_{species}' : Log10 VMR (e.g., 'log_10_f_CH4': -3.5)
+        Species names must match opacity table names exactly.
+    nlay : int
+        Number of atmospheric layers.
+
+    Returns
+    -------
+    Dict[str, jnp.ndarray]
+        Dictionary mapping species names to VMR profiles.
+        Each profile is an array of shape (nlay,).
+        Always includes 'H2' and 'He' as background gases.
+
+    Notes
+    -----
+    The background H2/He mixture is computed as:
+        total_trace = sum of all specified trace species VMRs
+        background = 1.0 - total_trace
+        H2 = background * (solar_H2 / (solar_H2 + solar_He))
+        He = background * (solar_He / (solar_H2 + solar_He))
+
+    Species names extracted from parameter keys (after stripping prefixes)
+    must match opacity table species names exactly, including capitalization.
+
+    Examples
+    --------
+    >>> params = {
+    ...     'log_10_f_H2O': -4.0,  # 1e-4
+    ...     'log_10_f_CH4': -3.5,  # ~3.16e-4
+    ...     'f_CO': 1e-5
+    ... }
+    >>> vmr_profiles = constant_vmr(p_lay, T_lay, params, nlay=50)
+    >>> # Returns dict with keys: 'H2O', 'CH4', 'CO', 'H2', 'He'
     """
     del p_lay, T_lay  # unused but kept for consistent signature
 
@@ -51,9 +116,6 @@ def constant_vmr(
         if k.startswith("log_10_f_"):
             species = k[len("log_10_f_"):]
             vmr[species] = 10.0 ** jnp.asarray(v)
-        elif k.startswith("f_"):
-            species = k[len("f_"):]
-            vmr[species] = jnp.asarray(v)
 
     trace_values = list(vmr.values())
     if trace_values:
@@ -69,12 +131,61 @@ def constant_vmr(
     return vmr_lay
 
 
+def build_constant_vmr_kernel(species_order: tuple[str, ...]):
+    param_keys = tuple(f"log_10_f_{s}" for s in species_order)
+
+    def _constant_vmr_fixed(p_lay, T_lay, params, nlay):
+        del p_lay, T_lay
+
+        values = [10.0 ** jnp.asarray(params[k]) for k in param_keys]
+        trace = jnp.stack(values, axis=0) if values else jnp.zeros((0,), dtype=jnp.float32)
+        background = 1.0 - jnp.sum(trace) if values else jnp.asarray(1.0)
+
+        vmr = {s: jnp.full((nlay,), trace[i]) for i, s in enumerate(species_order)}
+        vmr["H2"] = jnp.full((nlay,), background * (solar_h2 / solar_h2_he))
+        vmr["He"] = jnp.full((nlay,), background * (solar_he / solar_h2_he))
+        return vmr
+
+    return _constant_vmr_fixed
+
+
 def chemical_equilibrium(
     p_lay: jnp.ndarray,
     T_lay: jnp.ndarray,
     params: Dict[str, jnp.ndarray],
     nlay: int,
 ) -> Dict[str, jnp.ndarray]:
+    """
+    Placeholder for general chemical equilibrium calculation.
+
+    This function is reserved for future implementation of chemical equilibrium
+    calculations. Use CE_rate_jax for current thermochemical equilibrium needs.
+
+    Parameters
+    ----------
+    p_lay : jnp.ndarray
+        Layer pressures (nlay,) [bar].
+    T_lay : jnp.ndarray
+        Layer temperatures (nlay,) [K].
+    params : Dict[str, jnp.ndarray]
+        Dictionary of chemical parameters (implementation dependent).
+    nlay : int
+        Number of atmospheric layers.
+
+    Returns
+    -------
+    Dict[str, jnp.ndarray]
+        Dictionary mapping species names to VMR profiles (not implemented).
+
+    Raises
+    ------
+    NotImplementedError
+        This function is not yet implemented.
+
+    See Also
+    --------
+    CE_rate_jax : Current implementation for chemical equilibrium using RateJAX.
+    """
     del p_lay, T_lay, params, nlay
     raise NotImplementedError("chemical_equilibrium is not implemented yet.")
 
@@ -184,7 +295,59 @@ def quench_approx(
     params: Dict[str, jnp.ndarray],
     nlay: int,
 ) -> Dict[str, jnp.ndarray]:
-    
+    """
+    Compute quenched chemical abundance profiles (in development).
+
+    Calculates chemical abundances with quenching effects, where certain species
+    become "frozen in" at their high-temperature equilibrium values as gas parcels
+    are transported upward. This accounts for finite chemical reaction timescales.
+
+    Parameters
+    ----------
+    p_lay : jnp.ndarray
+        Layer pressures (nlay,) [bar].
+    T_lay : jnp.ndarray
+        Layer temperatures (nlay,) [K].
+    params : Dict[str, jnp.ndarray]
+        Dictionary of chemical parameters:
+        - 'M/H' : Metallicity [dex], log10 scale factor relative to solar.
+        - 'C/O' : Carbon to oxygen ratio.
+        Additional quenching parameters to be determined.
+    nlay : int
+        Number of atmospheric layers.
+
+    Returns
+    -------
+    Dict[str, jnp.ndarray]
+        Dictionary mapping species names to quenched VMR profiles (nlay,).
+        Species: H2O, CH4, CO, CO2, NH3, C2H2, C2H4, HCN, N2, H2, H, He.
+
+    Raises
+    ------
+    RuntimeError
+        If Gibbs cache has not been initialized with load_gibbs_cache().
+
+    Notes
+    -----
+    WARNING: This function is currently in development and incomplete.
+    The quenching calculation is not yet implemented - currently only computes
+    chemical equilibrium profiles without applying quenching.
+
+    Quenching typically affects species like:
+    - CO/CH4 ratio (quenched at T ~ 1000-1500 K)
+    - NH3 (quenched at similar temperatures)
+    - HCN and other nitrogen-bearing species
+
+    The quench level depends on:
+    - Chemical reaction timescales
+    - Vertical mixing timescales (Kzz profile)
+    - Temperature-pressure profile
+
+    See Also
+    --------
+    CE_rate_jax : Chemical equilibrium without quenching (currently functional).
+    """
+
     # Get cached Gibbs tables (will raise RuntimeError if not loaded)
     gibbs = get_gibbs_cache()
 

@@ -3,12 +3,37 @@ opacity_line.py
 ===============
 
 Overview:
-    TODO: Describe the purpose and responsibilities of this module.
+    Line (molecular/atomic) absorption opacity contribution for the forward
+    model.
+
+    This module interpolates preloaded line-by-line cross-sections from
+    `build_opacities` onto the layer (P, T) structure and combines them with
+    species mixing ratios to produce a mass opacity (cm^2 g^-1) on the forward
+    model wavelength grid.
 
 Sections to complete:
     - Usage
     - Key Functions
     - Notes
+
+Usage:
+    The retrieval pipeline builds and caches opacity tables via
+    `build_opacities`. During forward-model evaluation, pass the shared `state`
+    dictionary into `compute_line_opacity(state, params)` to obtain the line
+    opacity contribution on the model wavelength grid.
+
+Key Functions:
+    - `_interpolate_sigma`: Bilinear interpolation in (log10 T, log10 P) for all
+      species, returning cross-sections on the layer grid.
+    - `compute_line_opacity`: Combines interpolated cross-sections with mixing
+      ratios and mean molecular weight to produce cm^2 g^-1.
+    - `zero_line_opacity`: Convenience helper returning an all-zero array with
+      the expected shape.
+
+Notes:
+    Cross-sections are stored in log10 space in the registry and are converted
+    back to linear space after interpolation. Pressure is interpolated in bar;
+    `state["p_lay"]` is expected in microbar and is converted internally.
 """
 
 from typing import Dict
@@ -21,11 +46,21 @@ from data_constants import amu
 
 
 def _interpolate_sigma(layer_pressures_bar: jnp.ndarray, layer_temperatures: jnp.ndarray) -> jnp.ndarray:
-    """
-    Bilinear interpolation of cross sections on (log T, log P) grids.
+    """Interpolate line cross-sections to layer conditions.
 
-    sigma_cube shape: (n_species, n_temp, n_pressure, n_wavelength)
-    Returns: (n_species, n_layers, n_wavelength)
+    Performs bilinear interpolation on each species' (log10 T, log10 P) grid.
+
+    Parameters
+    ----------
+    layer_pressures_bar : jax.numpy.ndarray, shape `(nlay,)`
+        Layer pressures in bar.
+    layer_temperatures : jax.numpy.ndarray, shape `(nlay,)`
+        Layer temperatures in K.
+
+    Returns
+    -------
+    jax.numpy.ndarray
+        Cross-sections in linear space with shape `(nspecies, nlay, nwl)`.
     """
     # Direct access to cached registry data (no redundant caching needed)
     sigma_cube = XS.line_sigma_cube()
@@ -39,12 +74,25 @@ def _interpolate_sigma(layer_pressures_bar: jnp.ndarray, layer_temperatures: jnp
 
     # Find pressure bracket indices and weights in log space (same for all species)
     p_idx = jnp.searchsorted(log_p_grid, log_p_layers) - 1
-    p_idx = jnp.clip(p_idx, 0, len(log_p_grid) - 2)
+    p_idx = jnp.clip(p_idx, 0, log_p_grid.shape[0] - 2)
     p_weight = (log_p_layers - log_p_grid[p_idx]) / (log_p_grid[p_idx + 1] - log_p_grid[p_idx])
     p_weight = jnp.clip(p_weight, 0.0, 1.0)
 
     def _interp_one_species(sigma_3d, temp_grid):
-        """Interpolate cross sections for one species."""
+        """Interpolate cross-sections for a single species.
+
+        Parameters
+        ----------
+        sigma_3d : jax.numpy.ndarray
+            Log10 cross-sections with shape `(nT, nP, nwl)`.
+        temp_grid : jax.numpy.ndarray
+            Temperature grid (K) with shape `(nT,)`.
+
+        Returns
+        -------
+        jax.numpy.ndarray
+            Log10 cross-sections interpolated to layers with shape `(nlay, nwl)`.
+        """
         # sigma_3d: (n_temp, n_pressure, n_wavelength)
         # temp_grid: (n_temp,)
 
@@ -53,7 +101,7 @@ def _interpolate_sigma(layer_pressures_bar: jnp.ndarray, layer_temperatures: jnp
 
         # Find temperature bracket indices and weights in log space
         t_idx = jnp.searchsorted(log_t_grid, log_t_layers) - 1
-        t_idx = jnp.clip(t_idx, 0, len(log_t_grid) - 2)
+        t_idx = jnp.clip(t_idx, 0, log_t_grid.shape[0] - 2)
         t_weight = (log_t_layers - log_t_grid[t_idx]) / (log_t_grid[t_idx + 1] - log_t_grid[t_idx])
         t_weight = jnp.clip(t_weight, 0.0, 1.0)
 
@@ -76,7 +124,21 @@ def _interpolate_sigma(layer_pressures_bar: jnp.ndarray, layer_temperatures: jnp
     return 10.0 ** sigma_log
 
 
-def zero_line_opacity(state: Dict[str, jnp.ndarray], params: Dict[str, jnp.ndarray]):
+def zero_line_opacity(state: Dict[str, jnp.ndarray], params: Dict[str, jnp.ndarray]) -> jnp.ndarray:
+    """Return a zero line-opacity array.
+
+    Parameters
+    ----------
+    state : dict[str, jax.numpy.ndarray]
+        State dictionary containing `p_lay` and `wl` to determine output shape.
+    params : dict[str, jax.numpy.ndarray]
+        Unused; kept for API compatibility.
+
+    Returns
+    -------
+    jax.numpy.ndarray
+        Array of zeros with shape `(nlay, nwl)`.
+    """
     layer_pressures = state["p_lay"]
     wavelengths = state["wl"]
     layer_count = jnp.size(layer_pressures)
@@ -84,20 +146,35 @@ def zero_line_opacity(state: Dict[str, jnp.ndarray], params: Dict[str, jnp.ndarr
     return jnp.zeros((layer_count, wavelength_count))
 
 
-def compute_line_opacity(state: Dict[str, jnp.ndarray], params: Dict[str, jnp.ndarray]):
-    """
-    Compute line-by-line opacity.
+def compute_line_opacity(state: Dict[str, jnp.ndarray], params: Dict[str, jnp.ndarray]) -> jnp.ndarray:
+    """Compute line-by-line mass opacity.
 
-    Args:
-        state: State dictionary containing:
-            - p_lay: Layer pressures (microbar)
-            - T_lay: Layer temperatures (K)
-            - mu_lay: Mean molecular weight per layer
-            - vmr_lay (optional): VMR dictionary indexed by species name
-        params: Parameter dictionary (fallback for VMR if not in state)
+    Parameters
+    ----------
+    state : dict[str, jax.numpy.ndarray]
+        State dictionary with at least:
 
-    Returns:
-        Opacity array of shape (n_layers, n_wavelength) in cm^2/g
+        - `p_lay` : jax.numpy.ndarray, shape `(nlay,)`
+            Layer pressures in microbar.
+        - `T_lay` : jax.numpy.ndarray, shape `(nlay,)`
+            Layer temperatures in K.
+        - `mu_lay` : jax.numpy.ndarray, shape `(nlay,)`
+            Mean molecular weight per layer (amu).
+        - `vmr_lay` : Mapping[str, Any]
+            Mapping from species name to volume mixing ratio per layer. Values
+            may be a scalar or a length-`nlay` vector.
+    params : dict[str, jax.numpy.ndarray]
+        Unused; kept for API compatibility.
+
+    Returns
+    -------
+    jax.numpy.ndarray
+        Line absorption opacity in cm^2 g^-1 with shape `(nlay, nwl)`.
+
+    Raises
+    ------
+    KeyError
+        If a required species name is missing from `state["vmr_lay"]`.
     """
     layer_pressures = state["p_lay"]
     layer_temperatures = state["T_lay"]
@@ -106,22 +183,18 @@ def compute_line_opacity(state: Dict[str, jnp.ndarray], params: Dict[str, jnp.nd
 
     # Get species names and mixing ratios
     species_names = XS.line_species_names()
+    layer_count = layer_pressures.shape[0]
 
     # Direct lookup - species names must match VMR keys exactly
-    mixing_arrays = []
-    for name in species_names:
-        arr = jnp.asarray(layer_vmr[name])
-        if arr.ndim == 0:
-            arr = jnp.full((layer_pressures.shape[0],), arr)
-        mixing_arrays.append(arr)
-    mixing_ratios = jnp.stack(mixing_arrays)
+    mixing_ratios = jnp.stack(
+        [jnp.broadcast_to(jnp.asarray(layer_vmr[name]), (layer_count,)) for name in species_names],
+        axis=0,
+    )
 
     # Interpolate cross sections for all species at layer conditions
     # sigma_values shape: (n_species, n_layers, n_wavelength)
     sigma_values = _interpolate_sigma(layer_pressures / 1e6, layer_temperatures)
 
-    # Compute mass opacity normalization
-    normalization = mixing_ratios / (layer_mu[None, :] * amu)
-
-    # Sum over species: (n_species, n_layers, n_wavelength) -> (n_layers, n_wavelength)
-    return jnp.sum(sigma_values * normalization[:, :, None], axis=0)
+    # Sum over species, then apply mean-molecular-weight normalization
+    weighted_sigma = jnp.sum(sigma_values * mixing_ratios[:, :, None], axis=0)
+    return weighted_sigma / (layer_mu[:, None] * amu)

@@ -1,6 +1,74 @@
+"""
+Auxiliary Functions Module
+===========================
+
+This module provides auxiliary mathematical functions for atmospheric modeling,
+including interpolation routines and numerical utilities.
+
+Functions
+---------
+pchip_1d : Monotone PCHIP (Piecewise Cubic Hermite Interpolating Polynomial) interpolation
+
+Notes
+-----
+PCHIP Interpolation:
+    PCHIP is a shape-preserving cubic interpolation method that:
+    - Preserves monotonicity in the data
+    - Has continuous first derivatives
+    - Produces smooth curves without overshooting
+    - Is particularly useful for interpolating physical quantities (T, P, abundances)
+      where non-physical oscillations must be avoided
+
+The implementation follows the Fritsch-Carlson monotonicity-preserving algorithm,
+similar to scipy.interpolate.PchipInterpolator.
+
+References
+----------
+Fritsch, F. N., and Carlson, R. E. (1980).
+"Monotone Piecewise Cubic Interpolation."
+SIAM Journal on Numerical Analysis, 17(2), 238-246.
+"""
+
 import jax.numpy as jnp
 
 def _pchip_slopes(x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
+    """
+    Compute PCHIP (monotone cubic) slopes at interpolation nodes.
+
+    This is an internal helper function that computes the derivatives (slopes)
+    at each node such that the resulting cubic interpolant preserves monotonicity.
+    Uses the Fritsch-Carlson algorithm with SciPy-style endpoint formulas.
+
+    Parameters
+    ----------
+    x : jnp.ndarray
+        Node positions (N,), must be sorted in ascending order.
+    y : jnp.ndarray
+        Function values at nodes (N,).
+
+    Returns
+    -------
+    jnp.ndarray
+        Slopes (derivatives) at each node (N,).
+
+    Notes
+    -----
+    For N = 2: Returns constant slopes equal to the secant.
+
+    For N >= 3:
+        - Interior slopes: Uses weighted harmonic mean of adjacent secants
+          when they have the same sign (monotone region). Sets slope to zero
+          at local extrema (sign change in secants).
+        - Endpoint slopes: Uses one-sided formulas with limiting to prevent
+          overshoot, following SciPy's PchipInterpolator implementation.
+
+    The harmonic mean weighting ensures that the interpolant is monotone
+    between nodes where the data is monotone.
+
+    References
+    ----------
+    Fritsch & Carlson (1980), "Monotone Piecewise Cubic Interpolation"
+    """
     x = jnp.asarray(x)
     y = jnp.asarray(y)
 
@@ -63,13 +131,62 @@ def pchip_1d(x: jnp.ndarray,
              x_nodes: jnp.ndarray,
              y_nodes: jnp.ndarray) -> jnp.ndarray:
     """
-    Monotone PCHIP interpolation y(x) for 1D data.
+    Perform monotone PCHIP (Piecewise Cubic Hermite Interpolating Polynomial) interpolation.
 
-    x       : (...,)   eval points
-    x_nodes : (N,)     knot positions (sorted)
-    y_nodes : (N,)     values at knots
+    Interpolates 1D data using shape-preserving cubic Hermite polynomials.
+    The method preserves monotonicity in the data and produces smooth curves
+    without overshooting. Values outside the node range are clipped to the
+    boundary values.
 
-    Returns y(x) with same shape as x.
+    Parameters
+    ----------
+    x : jnp.ndarray
+        Evaluation points where interpolated values are desired.
+        Can have any shape (...,).
+    x_nodes : jnp.ndarray
+        Node positions (knot points) (N,). Must be sorted in ascending order.
+        These define the interpolation grid.
+    y_nodes : jnp.ndarray
+        Function values at the nodes (N,).
+
+    Returns
+    -------
+    jnp.ndarray
+        Interpolated values at evaluation points x.
+        Has the same shape as x.
+
+    Notes
+    -----
+    Algorithm:
+        1. Compute monotone-preserving slopes at each node using _pchip_slopes
+        2. For each evaluation point, find the interval [x_i, x_{i+1}] containing it
+        3. Evaluate the cubic Hermite polynomial on that interval
+
+    The cubic Hermite basis functions are:
+        h00(t) = 2t³ - 3t² + 1
+        h10(t) = t³ - 2t² + t
+        h01(t) = -2t³ + 3t²
+        h11(t) = t³ - t²
+    where t = (x - x_i) / (x_{i+1} - x_i).
+
+    The interpolant is:
+        y(x) = h00(t)·y_i + h10(t)·h·m_i + h01(t)·y_{i+1} + h11(t)·h·m_{i+1}
+    where h = x_{i+1} - x_i and m are the PCHIP slopes.
+
+    Extrapolation:
+        Values of x outside [x_nodes[0], x_nodes[-1]] are clipped to the boundaries,
+        effectively using constant extrapolation.
+
+    Examples
+    --------
+    >>> x_nodes = jnp.array([0.0, 1.0, 2.0, 3.0])
+    >>> y_nodes = jnp.array([0.0, 1.0, 0.5, 2.0])
+    >>> x_eval = jnp.linspace(0, 3, 100)
+    >>> y_interp = pchip_1d(x_eval, x_nodes, y_nodes)
+
+    See Also
+    --------
+    _pchip_slopes : Compute the monotone-preserving slopes
     """
     x = jnp.asarray(x)
     x_nodes = jnp.asarray(x_nodes)

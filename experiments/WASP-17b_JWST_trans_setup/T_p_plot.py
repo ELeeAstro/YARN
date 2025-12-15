@@ -314,7 +314,7 @@ def plot_Tp_band(
             if not name:
                 continue
             pars[name] = float(param_draws[name][ii])
-        if "log_g" not in pars:
+        if "log_10_g" not in pars:
             if "M_p" in pars and "R_p" in pars:
                 Mp = pars["M_p"] * M_jup
                 Rp = pars["R_p"] * R_jup

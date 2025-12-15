@@ -16,7 +16,7 @@ physics:
   opac_line: lbl
   opac_ray: None
   opac_cia: lbl
-  opac_cloud: nk
+  opac_cloud: None
 
   rt_scheme: emission_1d
 
@@ -64,42 +64,6 @@ params:
   - { name: log_10_f_CO2, dist: uniform, low: -9,   high: -1,  transform: logit, init: -5}
   - { name: log_10_f_CH4, dist: uniform, low: -9,   high: -1,  transform: logit, init: -5}
 
-  - { name: log_10_q_c_0, dist: uniform, low: -9,   high: 1,  transform: logit, init: 0}
-  - { name: log_10_p_base, dist: uniform, low: -6,   high: 1,  transform: logit, init: 0}
-
-  - { name: log_10_cld_r, dist: uniform, low: -3,   high: 2,  transform: logit, init: 0}
-  - { name: log_10_H_cld, dist: uniform, low: -2,   high: 2,  transform: logit, init: 0}
-  - { name: sigma, dist: uniform, low: 1.001,   high: 2.0,  transform: logit, init: 1}
-
-  - { name: wl_node_0, dist: delta, value: 7.0, transform: identity, init: 0.335}
-  - { name: wl_node_1, dist: delta, value: 8.0, transform: identity, init: 11.875}
-  - { name: wl_node_2, dist: delta, value: 8.5, transform: identity, init: 11.875}
-  - { name: wl_node_3, dist: delta, value: 8.75, transform: identity, init: 11.875}
-  - { name: wl_node_4, dist: delta, value: 9.0, transform: identity, init: 11.875}
-  - { name: wl_node_5, dist: delta, value: 10.0, transform: identity, init: 11.875}
-  - { name: wl_node_6, dist: delta, value: 11.0, transform: identity, init: 11.875}
-  - { name: wl_node_7, dist: delta, value: 12.0, transform: identity, init: 12.0}
-
-
-  - { name: n_0, dist: uniform, low: 0.4,   high: 3.0,  transform: logit, init: 0}
-  - { name: n_1, dist: uniform, low: 0.4,   high: 3.0,  transform: logit, init: 0}
-  - { name: n_2, dist: uniform, low: 0.4,   high: 3.0,  transform: logit, init: 0}
-  - { name: n_3, dist: uniform, low: 0.4,   high: 3.0,  transform: logit, init: 0}
-  - { name: n_4, dist: uniform, low: 0.4,   high: 3.0,  transform: logit, init: 0}
-  - { name: n_5, dist: uniform, low: 0.4,   high: 3.0,  transform: logit, init: 0}
-  - { name: n_6, dist: uniform, low: 0.4,   high: 3.0,  transform: logit, init: 0}
-  - { name: n_7, dist: uniform, low: 0.4,   high: 3.0,  transform: logit, init: 0}
-
-
-  - { name: log_10_k_0, dist: uniform, low: -6,   high: 1,  transform: logit, init: 0}
-  - { name: log_10_k_1, dist: uniform, low: -6,   high: 1,  transform: logit, init: 0}
-  - { name: log_10_k_2, dist: uniform, low: -6,   high: 1,  transform: logit, init: 0}
-  - { name: log_10_k_3, dist: uniform, low: -6,   high: 1,  transform: logit, init: 0}
-  - { name: log_10_k_4, dist: uniform, low: -6,   high: 1,  transform: logit, init: 0}
-  - { name: log_10_k_5, dist: uniform, low: -6,   high: 1,  transform: logit, init: 0}
-  - { name: log_10_k_6, dist: uniform, low: -6,   high: 1,  transform: logit, init: 0}
-  - { name: log_10_k_7, dist: uniform, low: -6,   high: 1,  transform: logit, init: 0}
-
 
 sampling:
 
@@ -118,7 +82,7 @@ sampling:
     num_live_points: 100        # live points (posterior resolution)
 
     # Slice sampler hyperparameters
-    s: 4                         # slices per dimension (default ~4)
+    s: 6                         # slices per dimension (default ~4)
     k: 0                         # phantom samples (0 = off, >0 for hard posteriors)
     c: null                       # parallel chains (null -> jaxns default, ~20*D)
     shell_fraction: 0.5          # fraction of shell explored per step (0<sf<=1)
@@ -134,7 +98,7 @@ sampling:
     termination:
       ess: 10000                        # target effective sample size
       evidence_uncert: null            # stop when σ_logZ < 0.3
-      dlogZ: 1.0                    # stop when remaining evidence small
+      dlogZ: 1.0                     # stop when remaining evidence small
       max_samples: 100000             # safety cap for samples
       max_num_likelihood_evaluations: null
       rtol: null
@@ -145,12 +109,11 @@ sampling:
     seed: 42                          # RNG seed for JAX
 
   blackjax_ns:
-    num_live_points: 250
-    num_inner_steps: 65
-    num_delete: 125
-    dlogz_stop: -2
+    num_live_points: 150
+    num_inner_steps: 50
+    num_delete: 75
+    dlogz_stop: 0
     seed: 42
-    posterior_samples: 10000
 
 runtime:
   platform: cpu           # cpu | gpu | cuda | metal

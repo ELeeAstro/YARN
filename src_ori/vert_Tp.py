@@ -25,7 +25,7 @@ Pressures are typically in units of bar or Pa depending on the function.
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Tuple
 
 import jax
 import jax.numpy as jnp
@@ -86,7 +86,7 @@ def hopf_function(tau: jnp.ndarray) -> jnp.ndarray:
     out = jnp.where(tau_safe > 5.0, high, out)
     return out
 
-def isothermal(p_lev: jnp.ndarray, params: Dict[str, jnp.ndarray]):
+def isothermal(p_lev: jnp.ndarray, params: Dict[str, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Generate an isothermal temperature profile.
 
@@ -113,7 +113,7 @@ def isothermal(p_lev: jnp.ndarray, params: Dict[str, jnp.ndarray]):
     T_lay = jnp.full((nlev-1,), T_iso)
     return T_lev, T_lay
 
-def Barstow(p_lev: jnp.ndarray, params: Dict[str, jnp.ndarray]):
+def Barstow(p_lev: jnp.ndarray, params: Dict[str, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Generate a temperature profile with isothermal upper atmosphere and adiabatic deeper layers.
 
@@ -153,7 +153,7 @@ def Barstow(p_lev: jnp.ndarray, params: Dict[str, jnp.ndarray]):
     return T_lev, T_lay
 
 
-def Milne(p_lev: jnp.ndarray, params: Dict[str, jnp.ndarray]):
+def Milne(p_lev: jnp.ndarray, params: Dict[str, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Generate a Milne temperature profile for internal heating.
 
@@ -191,7 +191,7 @@ def Milne(p_lev: jnp.ndarray, params: Dict[str, jnp.ndarray]):
     return T_lev, T_lay
 
 
-def Guillot(p_lev: jnp.ndarray, params: Dict[str, jnp.ndarray]):
+def Guillot(p_lev: jnp.ndarray, params: Dict[str, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Generate a Guillot (2010) analytical temperature profile.
 
@@ -245,14 +245,7 @@ def Guillot(p_lev: jnp.ndarray, params: Dict[str, jnp.ndarray]):
     T_lay = 0.5 * (T_lev[:-1] + T_lev[1:])
     return T_lev, T_lay
 
-from typing import Dict, Tuple
-import jax.numpy as jnp
-
-
-def MandS09(
-    p_lev: jnp.ndarray,
-    params: Dict[str, jnp.ndarray],
-) -> Tuple[jnp.ndarray, jnp.ndarray]:
+def MandS09(p_lev: jnp.ndarray, params: Dict[str, jnp.ndarray], ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Generate Madhusudhan & Seager (2009) three-region analytical temperature profile.
 
@@ -324,7 +317,7 @@ def MandS09(
     return T_lev, T_lay
 
 
-def picket_fence(p_lev: jnp.ndarray, params: Dict[str, jnp.ndarray]):
+def picket_fence(p_lev: jnp.ndarray, params: Dict[str, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Generate a picket fence radiative transfer temperature profile.
 
@@ -449,7 +442,7 @@ def picket_fence(p_lev: jnp.ndarray, params: Dict[str, jnp.ndarray]):
     T_lay = 0.5 * (T_lev[:-1] + T_lev[1:])
     return T_lev, T_lay
 
-def dry_convective_adjustment(T_lay, p_lay, p_lev, kappa, max_iter=10, tol=1e-6):
+def dry_convective_adjustment(T_lay: jnp.ndarray, p_lay: jnp.ndarray, p_lev: jnp.ndarray, kappa: float, max_iter: int = 10, tol: float = 1e-6) -> jnp.ndarray:
     """
     Apply dry convective adjustment to enforce convective stability.
 

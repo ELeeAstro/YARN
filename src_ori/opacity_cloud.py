@@ -37,6 +37,82 @@ def grey_cloud(state: Dict[str, jnp.ndarray], params: Dict[str, jnp.ndarray]) ->
     return k_cld, ssa, g
 
 
+def powerlaw_cloud(state: Dict[str, jnp.ndarray], params: Dict[str, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """
+    Two-component cloud opacity: grey + power-law (Rayleigh-like) wavelength dependence.
+
+    Implements: k_cloud(λ) = k_grey + k_powerlaw * (λ / λ_ref)^(-alpha)
+
+    This combines a wavelength-independent grey opacity with a power-law component
+    that can represent Rayleigh scattering or other wavelength-dependent processes.
+
+    Parameters (from params dict)
+    -----------------------------
+    log_10_k_cld_grey : float
+        Log10 of constant grey opacity component (cm^2/g)
+        This provides a wavelength-independent floor opacity
+    log_10_k_cld_powerlaw : float
+        Log10 of power-law amplitude at λ_ref (cm^2/g)
+        This is the strength of the wavelength-dependent component
+    alpha_cld : float
+        Power-law exponent for wavelength dependence
+        - alpha = 0: both components are grey
+        - alpha = 4: Rayleigh scattering slope (λ^-4)
+        - alpha > 0: power-law component is stronger at shorter wavelengths
+    wl_ref_cld : float, optional
+        Reference wavelength in microns (default: 1.0 μm)
+
+    Returns
+    -------
+    k_cld : jnp.ndarray
+        Cloud opacity (nlay, nwl) in cm^2/g
+    ssa : jnp.ndarray
+        Single scattering albedo (zeros, pure absorption)
+    g : jnp.ndarray
+        Asymmetry parameter (zeros)
+
+    Examples
+    --------
+    Configuration for pure Rayleigh-like slope (no grey):
+        log_10_k_cld_grey: -10.0  # negligible
+        log_10_k_cld_powerlaw: -2.0  # dominant
+        alpha_cld: 4.0
+
+    Configuration for grey + Rayleigh slope:
+        log_10_k_cld_grey: -3.0
+        log_10_k_cld_powerlaw: -2.0
+        alpha_cld: 4.0
+    """
+    wl = state["wl"]
+    layer_count = state["nlay"]
+    wavelength_count = state["nwl"]
+
+    # Constant grey opacity component
+    k_grey = 10.0**jnp.asarray(params["log_10_k_cld_grey"])
+
+    # Power-law amplitude at reference wavelength
+    k_powerlaw = 10.0**jnp.asarray(params["log_10_k_cld_Ray"])
+
+    # Power-law exponent (alpha=4 gives Rayleigh slope)
+    alpha = jnp.asarray(params["alpha_cld"])
+
+    # Reference wavelength (default 1.0 micron if not specified)
+    wl_ref = jnp.asarray(params.get("wl_ref_cld", 1.0))
+
+    # Two-component opacity: grey + power-law
+    # k(λ) = k_grey + k_powerlaw * (λ/λ_ref)^(-alpha)
+    k_wl = k_grey + k_powerlaw * (wl / wl_ref)**(-alpha)
+
+    # Broadcast to (nlay, nwl)
+    k_cld = jnp.broadcast_to(k_wl, (layer_count, wavelength_count))
+
+    # Pure absorption (no scattering)
+    ssa = jnp.zeros_like(k_cld)
+    g = jnp.zeros_like(k_cld)
+
+    return k_cld, ssa, g
+
+
 def F18_cloud(state: Dict[str, jnp.ndarray], params: Dict[str, jnp.ndarray]) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     wl = state["wl"]
     layer_count = int(state["nlay"])

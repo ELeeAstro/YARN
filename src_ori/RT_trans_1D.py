@@ -46,68 +46,53 @@ def _sum_opacity_components_ck(
     nlay = int(state["nlay"])
     nwl = int(state["nwl"])
 
-    if not opacity_components:
-        # Need to get ng from ck data
+    line_opacity = opacity_components.get("line")
+    if line_opacity is None:
         g_weights = _get_ck_weights(state)
         ng = g_weights.shape[-1]
-        return jnp.zeros((nlay, nwl, ng))
+        line_opacity = jnp.zeros((nlay, nwl, ng))
 
-    # Get line opacity (3D: nlay, nwl, ng)
-    line_opacity = opacity_components.get("line", None)
+    zeros_2d = jnp.zeros((nlay, nwl), dtype=line_opacity.dtype)
+    component_keys_2d = ("rayleigh", "cia", "special", "cloud")
+    components_2d = jnp.stack([opacity_components.get(k, zeros_2d) for k in component_keys_2d], axis=0)
+    summed_2d = jnp.sum(components_2d, axis=0)
 
-    if line_opacity is not None:
-        # Start with line opacity (already has g-dimension)
-        k_tot = line_opacity
-    else:
-        # No line opacity, need to create 3D array
-        g_weights = _get_ck_weights(state)
-        ng = g_weights.shape[-1]
-        k_tot = jnp.zeros((nlay, nwl, ng))
-
-    # Add other components (ray, cia, cloud) - these are 2D
-    # Need to broadcast them over g-dimension
-    for name, component in opacity_components.items():
-        if name != "line":
-            # component shape: (nlay, nwl)
-            # Expand to (nlay, nwl, ng) by broadcasting
-            k_tot = k_tot + component[:, :, None]
-
-    return k_tot
+    return line_opacity + summed_2d[:, :, None]
 
 def _sum_opacity_components_lbl(
     state: Dict[str, jnp.ndarray],
     opacity_components: Mapping[str, jnp.ndarray],
 ) -> jnp.ndarray:
     """Return the summed opacity grid for all provided components."""
-    if opacity_components:
-        first = next(iter(opacity_components.values()))
-        k_tot = jnp.zeros_like(first)
-        for component in opacity_components.values():
-            k_tot = k_tot + component
-    else:
-        nlay = int(state["nlay"])
-        nwl = int(state["nwl"])
-        k_tot = jnp.zeros((nlay, nwl))
+    nlay = int(state["nlay"])
+    nwl = int(state["nwl"])
 
-    return k_tot
+    if not opacity_components:
+        return jnp.zeros((nlay, nwl))
+
+    component_keys = ("line", "rayleigh", "cia", "special", "cloud")
+    first = next((opacity_components.get(k) for k in component_keys if k in opacity_components), None)
+    if first is None:
+        return jnp.zeros((nlay, nwl))
+
+    zeros = jnp.zeros_like(first)
+    stacked = jnp.stack([opacity_components.get(k, zeros) for k in component_keys], axis=0)
+    return jnp.sum(stacked, axis=0)
 
 
-def _transit_depth_from_opacity(
-    state: Dict[str, jnp.ndarray],
-    k_tot: jnp.ndarray,
-) -> jnp.ndarray:
-    """Compute a transit spectrum for a provided total opacity grid."""
+def _build_transit_geometry(state: Dict[str, jnp.ndarray]) -> tuple[jnp.ndarray, jnp.ndarray]:
+    """Precompute geometry terms for transit depth calculation.
 
+    Returns
+    -------
+    P1D : jax.numpy.ndarray
+        Path-length operator with shape `(nlay, nlay)`.
+    area_weight : jax.numpy.ndarray
+        Annulus area weights with shape `(nlay,)`.
+    """
     R0 = jnp.asarray(state["R0"])
-    R_s = jnp.asarray(state["R_s"])
     z_lev = jnp.asarray(state["z_lev"])
     z_lay = jnp.asarray(state["z_lay"])
-    rho = jnp.asarray(state["rho_lay"])
-    dz = jnp.asarray(state["dz"])
-
-    k_floor = 1.0e-99
-    k_eff = jnp.maximum(k_tot, k_floor)
-    dtau_v = k_eff * rho[:, None] * dz[:, None]
 
     r_mid = R0 + z_lay
     r_low = R0 + z_lev[:-1]
@@ -130,10 +115,33 @@ def _transit_depth_from_opacity(
     cond2 = (r_low_2d <= r_mid_2d) & (r_mid_2d < r_up_2d)
 
     P1D = jnp.where(cond1, P_case1, jnp.where(cond2, P_case2, P_case3))
+    area_weight = 2.0 * r_mid * dr
 
+    return P1D, area_weight
+
+
+def _transit_depth_from_opacity(
+    state: Dict[str, jnp.ndarray],
+    k_tot: jnp.ndarray,
+    geometry: tuple[jnp.ndarray, jnp.ndarray] | None = None,
+) -> jnp.ndarray:
+    """Compute a transit spectrum for a provided total opacity grid."""
+
+    R0 = jnp.asarray(state["R0"])
+    R_s = jnp.asarray(state["R_s"])
+    rho = jnp.asarray(state["rho_lay"])
+    dz = jnp.asarray(state["dz"])
+
+    k_floor = 1.0e-99
+    k_eff = jnp.maximum(k_tot, k_floor)
+    dtau_v = k_eff * rho[:, None] * dz[:, None]
+
+    if geometry is None:
+        P1D, area_weight = _build_transit_geometry(state)
+    else:
+        P1D, area_weight = geometry
     tau_path = jnp.matmul(P1D, dtau_v)
 
-    area_weight = 2.0 * r_mid * dr
     one_minus_trans = 1.0 - jnp.exp(-tau_path)
     dR2 = jnp.sum(area_weight[:, None] * one_minus_trans, axis=0)
 
@@ -144,6 +152,7 @@ def _transit_depth_from_opacity(
 def _transit_depth_ck(
     state: Dict[str, jnp.ndarray],
     k_tot: jnp.ndarray,
+    geometry: tuple[jnp.ndarray, jnp.ndarray] | None = None,
 ) -> jnp.ndarray:
     """Integrate correlated-k opacities over g-points to obtain transit depth."""
     g_weights = _get_ck_weights(state)
@@ -151,7 +160,7 @@ def _transit_depth_ck(
     g_weights = g_weights[:ng]
 
     def _depth_for_g(k_slice: jnp.ndarray) -> jnp.ndarray:
-        return _transit_depth_from_opacity(state, k_slice)
+        return _transit_depth_from_opacity(state, k_slice, geometry=geometry)
 
     k_tot_g = jnp.moveaxis(k_tot, -1, 0)  # (ng, nlay, nwl)
     g_depths = jax.vmap(_depth_for_g)(k_tot_g)  # (ng, nwl)
@@ -183,6 +192,8 @@ def compute_transit_depth_1d(
 
     D_net: jnp.ndarray
 
+    geometry = _build_transit_geometry(state)
+
     if state["ck"] == True:
         # Corr-k mode: build total opacity then integrate over g-points
         k_tot = _sum_opacity_components_ck(state, opacity_components)  # (nlay, nwl, ng)
@@ -192,11 +203,11 @@ def compute_transit_depth_1d(
             if cloud_component.ndim == 2:
                 cloud_component = cloud_component[:, :, None]
             k_no_cloud = k_tot - cloud_component
-            D_cloud = _transit_depth_ck(state, k_tot)
-            D_clear = _transit_depth_ck(state, k_no_cloud)
+            D_cloud = _transit_depth_ck(state, k_tot, geometry=geometry)
+            D_clear = _transit_depth_ck(state, k_no_cloud, geometry=geometry)
             D_net = f_cloud * D_cloud + (1.0 - f_cloud) * D_clear
         else:
-            D_net = _transit_depth_ck(state, k_tot)
+            D_net = _transit_depth_ck(state, k_tot, geometry=geometry)
     else:
         # Lbl mode
         k_tot = _sum_opacity_components_lbl(state, opacity_components) # Return (nlay, nwl)
@@ -204,10 +215,10 @@ def compute_transit_depth_1d(
         if "f_cloud" in params and "cloud" in opacity_components:
             f_cloud = jnp.clip(jnp.asarray(params["f_cloud"]), 0.0, 1.0)
             k_no_cloud = k_tot - opacity_components["cloud"]
-            D_cloud = _transit_depth_from_opacity(state, k_tot)
-            D_clear = _transit_depth_from_opacity(state, k_no_cloud)
+            D_cloud = _transit_depth_from_opacity(state, k_tot, geometry=geometry)
+            D_clear = _transit_depth_from_opacity(state, k_no_cloud, geometry=geometry)
             D_net = f_cloud * D_cloud + (1.0 - f_cloud) * D_clear
         else:
-            D_net = _transit_depth_from_opacity(state, k_tot)
+            D_net = _transit_depth_from_opacity(state, k_tot, geometry=geometry)
 
     return D_net

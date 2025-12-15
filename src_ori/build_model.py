@@ -17,16 +17,18 @@ from data_constants import kb, amu, R_jup, R_sun, bar, G, M_jup
 
 from vert_alt import hypsometric, hypsometric_variable_g, hypsometric_variable_g_pref
 from vert_Tp import isothermal, Milne, Guillot, Barstow, MandS09, picket_fence
-from vert_chem import constant_vmr, chemical_equilibrium, CE_rate_jax
+from vert_chem import build_constant_vmr_kernel, constant_vmr, chemical_equilibrium, CE_rate_jax
 from vert_mu import constant_mu, compute_mu
 
 from opacity_line import zero_line_opacity, compute_line_opacity
 from opacity_ck import zero_ck_opacity, compute_ck_opacity
 from opacity_ray import zero_ray_opacity, compute_ray_opacity
 from opacity_cia import zero_cia_opacity, compute_cia_opacity
-from opacity_cloud import zero_cloud_opacity, grey_cloud, F18_cloud, direct_nk
+from opacity_special import zero_special_opacity, compute_special_opacity
+from opacity_cloud import zero_cloud_opacity, grey_cloud, powerlaw_cloud, F18_cloud, direct_nk
 
 import build_opacities as XS
+from build_chem import infer_trace_species, infer_log10_vmr_keys, validate_log10_vmr_params
 
 from RT_trans_1D import compute_transit_depth_1d
 from RT_em_1D import compute_emission_spectrum_1d
@@ -170,12 +172,21 @@ def build_forward_model(cfg, obs, stellar_flux=None, kk_cache=None, return_highr
         cld_opac_kernel = zero_cloud_opacity
     elif cld_opac_scheme_str.lower() == "grey":
         cld_opac_kernel = grey_cloud
+    elif cld_opac_scheme_str.lower() == "powerlaw_cloud":
+        cld_opac_kernel = powerlaw_cloud
     elif cld_opac_scheme_str.lower() == "f18":
         cld_opac_kernel = F18_cloud
     elif cld_opac_scheme_str.lower() == "nk":
         cld_opac_kernel = direct_nk
     else:
         raise NotImplementedError(f"Unknown cld_opac_scheme='{cld_opac_scheme}'")
+
+    special_opac_scheme = getattr(phys, "opac_special", "on")
+    special_opac_scheme_str = str(special_opac_scheme).lower()
+    if special_opac_scheme_str in ("none", "off", "false", "0"):
+        special_opac_kernel = zero_special_opacity
+    else:
+        special_opac_kernel = compute_special_opacity
 
     rt_raw = getattr(phys, "rt_scheme", None)
     if rt_raw in (None, "None"):
@@ -199,6 +210,19 @@ def build_forward_model(cfg, obs, stellar_flux=None, kk_cache=None, return_highr
     if emission_mode is None:
         emission_mode = "planet"
     emission_mode = str(emission_mode).lower().replace(" ", "_")
+    is_brown_dwarf = emission_mode in ("brown_dwarf", "browndwarf", "bd")
+
+    trace_species = infer_trace_species(
+        cfg,
+        line_opac_scheme_str=line_opac_scheme_str,
+        ray_opac_scheme_str=ray_opac_scheme_str,
+        cia_opac_scheme_str=cia_opac_scheme_str,
+        special_opac_scheme_str=special_opac_scheme_str,
+    )
+    log_keys = infer_log10_vmr_keys(trace_species)
+    if chemistry_kernel is constant_vmr:
+        validate_log10_vmr_params(cfg, trace_species)
+        chemistry_kernel = build_constant_vmr_kernel(trace_species)
 
     @jax.jit
     def forward_model(params: Dict[str, jnp.ndarray]) -> jnp.ndarray:
@@ -209,7 +233,7 @@ def build_forward_model(cfg, obs, stellar_flux=None, kk_cache=None, return_highr
         wl = wl_hi
 
         # Dimension constants
-        nwl = jnp.size(wl)
+        nwl = wl.shape[0]
 
         # Planet and star radii (R0 is radius at p_bot)
         R0 = jnp.asarray(full_params["R_p"]) * R_jup
@@ -239,18 +263,27 @@ def build_forward_model(cfg, obs, stellar_flux=None, kk_cache=None, return_highr
 
         # State dictionary for physics kernels
         g_weights = None
+        ck_mix_code = None
         if ck and XS.has_ck_data():
             g_weights = XS.ck_g_weights()
             if g_weights.ndim > 1:
                 g_weights = g_weights[0]
             g_weights = jnp.asarray(g_weights)
 
+            # Get ck_mix option from config
+            ck_mix_raw = getattr(cfg.opac, "ck_mix", "RORR")
+            ck_mix_raw = str(ck_mix_raw).upper()
+            if ck_mix_raw == "PRAS":
+                ck_mix_code = 2
+            else:
+                ck_mix_code = 1
+
         state = {
             "ck": ck,
             "nwl": nwl,
             "nlay": nlay,
             "wl": wl,
-            "emission_mode": emission_mode,
+            "is_brown_dwarf": is_brown_dwarf,
             "R0": R0,
             "R_s": R_s,
             "p_lev": p_lev,
@@ -271,17 +304,21 @@ def build_forward_model(cfg, obs, stellar_flux=None, kk_cache=None, return_highr
             state["kk_cache"] = kk_cache
         if g_weights is not None:
             state["g_weights"] = g_weights
+        if ck_mix_code is not None:
+            state["ck_mix"] = ck_mix_code
 
         # Opacity components
         k_line = line_opac_kernel(state, full_params)
         k_ray = ray_opac_kernel(state, full_params)
         k_cia = cia_opac_kernel(state, full_params)
+        k_special = special_opac_kernel(state, full_params)
         k_cld_ext, cld_ssa, cld_g = cld_opac_kernel(state, full_params)
 
         opacity_components = {
             "line": k_line,
             "rayleigh": k_ray,
             "cia": k_cia,
+            "special": k_special,
             "cloud": k_cld_ext,
             "cloud_ssa": cld_ssa,
             "cloud_g": cld_g,
