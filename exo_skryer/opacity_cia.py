@@ -1,6 +1,14 @@
 """
 opacity_cia.py
-==================
+==============
+
+Collision-Induced Absorption (CIA) opacity calculations.
+
+This module computes CIA opacity contributions for molecular pairs (e.g., H2-He,
+H2-H2) in exoplanet atmospheres. CIA arises from transient dipole moments during
+molecular collisions and is particularly important for H2-dominated atmospheres.
+The opacity is computed by interpolating pre-loaded cross-sections to layer
+temperatures and combining them with species volume mixing ratios.
 """
 
 from typing import Dict
