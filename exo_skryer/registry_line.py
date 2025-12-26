@@ -48,6 +48,8 @@ class LineRegistryEntry:
 _LINE_ENTRIES: Tuple[LineRegistryEntry, ...] = ()
 _LINE_SIGMA_CACHE: jnp.ndarray | None = None
 _LINE_TEMPERATURE_CACHE: jnp.ndarray | None = None
+_LINE_WAVELENGTH_CACHE: jnp.ndarray | None = None
+_LINE_PRESSURE_CACHE: jnp.ndarray | None = None
 
 # Clear all the cache entries
 def _clear_cache():
@@ -60,11 +62,13 @@ def _clear_cache():
     line_pick_arrays.cache_clear()
 
 # Reset all the global registries
-def reset_registry():
-    global _LINE_ENTRIES, _LINE_SIGMA_CACHE, _LINE_TEMPERATURE_CACHE
+def reset_registry() -> None:
+    global _LINE_ENTRIES, _LINE_SIGMA_CACHE, _LINE_TEMPERATURE_CACHE, _LINE_WAVELENGTH_CACHE, _LINE_PRESSURE_CACHE
     _LINE_ENTRIES = ()
     _LINE_SIGMA_CACHE = None
     _LINE_TEMPERATURE_CACHE = None
+    _LINE_WAVELENGTH_CACHE = None
+    _LINE_PRESSURE_CACHE = None
     _clear_cache()
 
 # Check if the registries are set or not
@@ -277,7 +281,7 @@ def _rectangularize_entries(entries: List[LineRegistryEntry]) -> Tuple[LineRegis
 def load_line_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_dir: Optional[Path] = None):
 
     # Allocate the global scope caches
-    global _LINE_ENTRIES, _LINE_SIGMA_CACHE, _LINE_TEMPERATURE_CACHE
+    global _LINE_ENTRIES, _LINE_SIGMA_CACHE, _LINE_TEMPERATURE_CACHE, _LINE_WAVELENGTH_CACHE, _LINE_PRESSURE_CACHE
 
     entries: List[LineRegistryEntry] = []
 
@@ -335,14 +339,20 @@ def load_line_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_d
     temp_stacked = np.stack([entry.temperatures for entry in _LINE_ENTRIES], axis=0)
     _LINE_TEMPERATURE_CACHE = jnp.asarray(temp_stacked, dtype=jnp.float64)
 
+    # Wavelength and pressure grids: all species share the same grids (rectangularized)
+    _LINE_WAVELENGTH_CACHE = jnp.asarray(_LINE_ENTRIES[0].wavelengths, dtype=jnp.float64)
+    _LINE_PRESSURE_CACHE = jnp.asarray(_LINE_ENTRIES[0].pressures, dtype=jnp.float64)
+
     print(f"[Line] Cross section cache: {_LINE_SIGMA_CACHE.shape} (dtype: {_LINE_SIGMA_CACHE.dtype})")
     print(f"[Line] Temperature cache: {_LINE_TEMPERATURE_CACHE.shape} (dtype: {_LINE_TEMPERATURE_CACHE.dtype})")
 
     # Estimate memory usage
     sigma_mb = _LINE_SIGMA_CACHE.size * _LINE_SIGMA_CACHE.itemsize / 1024**2
     temp_mb = _LINE_TEMPERATURE_CACHE.size * _LINE_TEMPERATURE_CACHE.itemsize / 1024**2
-    total_mb = sigma_mb + temp_mb
-    print(f"[Line] Estimated device memory: {total_mb:.1f} MB (σ: {sigma_mb:.1f} MB, T: {temp_mb:.1f} MB)")
+    wl_mb = _LINE_WAVELENGTH_CACHE.size * _LINE_WAVELENGTH_CACHE.itemsize / 1024**2
+    p_mb = _LINE_PRESSURE_CACHE.size * _LINE_PRESSURE_CACHE.itemsize / 1024**2
+    total_mb = sigma_mb + temp_mb + wl_mb + p_mb
+    print(f"[Line] Estimated device memory: {total_mb:.1f} MB (σ: {sigma_mb:.1f} MB, T: {temp_mb:.2f} MB, λ: {wl_mb:.2f} MB, P: {p_mb:.2f} MB)")
 
     _clear_cache()
 
@@ -355,16 +365,16 @@ def line_species_names() -> Tuple[str, ...]:
 
 @lru_cache(None)
 def line_master_wavelength() -> jnp.ndarray:
-    if not _LINE_ENTRIES:
+    if _LINE_WAVELENGTH_CACHE is None:
         raise RuntimeError("Line registry empty; call build_opacities() first.")
-    return _LINE_ENTRIES[0].wavelengths
+    return _LINE_WAVELENGTH_CACHE
 
 
 @lru_cache(None)
 def line_pressure_grid() -> jnp.ndarray:
-    if not _LINE_ENTRIES:
+    if _LINE_PRESSURE_CACHE is None:
         raise RuntimeError("Line registry empty; call build_opacities() first.")
-    return _LINE_ENTRIES[0].pressures
+    return _LINE_PRESSURE_CACHE
 
 
 @lru_cache(None)

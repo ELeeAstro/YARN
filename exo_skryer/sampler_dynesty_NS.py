@@ -9,6 +9,7 @@ from pathlib import Path
 import pickle
 
 import numpy as np
+import jax.numpy as jnp
 
 from .build_prepared import Prepared
 
@@ -81,7 +82,13 @@ def build_prior_transform_dynesty(cfg) -> Tuple[callable, List[str]]:
             if dist_name == "uniform":
                 low = float(getattr(p, "low"))
                 high = float(getattr(p, "high"))
-                theta[i] = low + u[i] * (high - low)
+                transform = str(getattr(p, "transform", "identity")).lower()
+                if transform == "logit":
+                    z = np.log(u[i] / (1.0 - u[i]))
+                    t = 1.0 / (1.0 + np.exp(-z))
+                    theta[i] = low + (high - low) * t
+                else:
+                    theta[i] = low + u[i] * (high - low)
 
             elif dist_name in ("gaussian", "normal"):
                 mu = float(getattr(p, "mu"))
@@ -122,10 +129,10 @@ def build_loglikelihood_dynesty(cfg, prep: Prepared, param_names: List[str]) -> 
     loglikelihood : callable
         Function with signature (theta) -> logL returning log-likelihood
     """
-    # Observed data - convert to NumPy for efficient NumPy operations
-    y_obs = np.asarray(prep.y)
-    dy_obs_p = np.asarray(prep.dy_p)
-    dy_obs_m = np.asarray(prep.dy_m)
+    # Observed data - keep in JAX for single-scalar output conversion
+    y_obs = jnp.asarray(prep.y)
+    dy_obs_p = jnp.asarray(prep.dy_p)
+    dy_obs_m = jnp.asarray(prep.dy_m)
 
     def loglikelihood(theta: np.ndarray) -> float:
         """
@@ -141,12 +148,17 @@ def build_loglikelihood_dynesty(cfg, prep: Prepared, param_names: List[str]) -> 
         logL : float
             Log-likelihood value
         """
+        def invalid_ll() -> float:
+            return -1e100
+
         try:
             # Build parameter dictionary
             theta_dict = {param_names[i]: float(theta[i]) for i in range(len(theta))}
 
             # Call forward model (JAX) and convert to NumPy
-            mu = np.asarray(prep.fm(theta_dict))  # (N,)
+            mu = prep.fm(theta_dict)  # (N,)
+            if not bool(jnp.all(jnp.isfinite(mu))):
+                return invalid_ll()
             r = y_obs - mu  # residuals
 
             # Split-normal likelihood using NumPy operations
@@ -155,31 +167,31 @@ def build_loglikelihood_dynesty(cfg, prep: Prepared, param_names: List[str]) -> 
             sig_jit2 = sig_jit * sig_jit
 
             # Inflate BOTH sides in quadrature
-            sigp_eff = np.sqrt(dy_obs_p**2 + sig_jit2)
-            sigm_eff = np.sqrt(dy_obs_m**2 + sig_jit2)
+            sigp_eff = jnp.sqrt(dy_obs_p**2 + sig_jit2)
+            sigm_eff = jnp.sqrt(dy_obs_m**2 + sig_jit2)
 
             # Choose side for exponent
-            sig_eff = np.where(r >= 0.0, sigp_eff, sigm_eff)
+            sig_eff = jnp.where(r >= 0.0, sigp_eff, sigm_eff)
 
             # Normalisation must use the SAME effective scales
-            norm = np.clip(sigm_eff + sigp_eff, 1e-300, np.inf)
-            sig_eff = np.clip(sig_eff, 1e-300, np.inf)
+            norm = jnp.clip(sigm_eff + sigp_eff, 1e-300, jnp.inf)
+            sig_eff = jnp.clip(sig_eff, 1e-300, jnp.inf)
 
-            logC = 0.5 * np.log(2.0 / np.pi) - np.log(norm)
-            logL = np.sum(logC - 0.5 * (r / sig_eff) ** 2)
+            logC = 0.5 * jnp.log(2.0 / jnp.pi) - jnp.log(norm)
+            logL = jnp.sum(logC - 0.5 * (r / sig_eff) ** 2)
 
             # Convert to Python float
             result = float(logL)
 
             # Handle non-finite values
             if not np.isfinite(result):
-                return -1e100
+                return invalid_ll()
 
             return result
 
         except Exception as e:
             print(f"[Dynesty] Likelihood evaluation error: {e}")
-            return -1e100
+            return invalid_ll()
 
     return loglikelihood
 

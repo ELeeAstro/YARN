@@ -28,17 +28,18 @@ __all__ = [
 # Dataclass for the Rayleigh cross section data
 # Note: During preprocessing, all arrays are NumPy (CPU)
 # They get converted to JAX (device) only at the final cache creation step
-# Mixed precision: float64 for wavelengths (better accuracy), float32 for cross sections (memory savings)
+# Float64 throughout for wavelengths and cross sections.
 @dataclass(frozen=True)
 class RayRegistryEntry:
     name: str
     idx: int
     wavelengths: np.ndarray     # NumPy during preprocessing (float64)
-    cross_sections: np.ndarray  # NumPy during preprocessing (float32 to save memory)
+    cross_sections: np.ndarray  # NumPy during preprocessing (float64)
 
 # Global Rayleigh cross section caches
 _RAY_ENTRIES: Tuple[RayRegistryEntry, ...] = ()
 _RAY_SIGMA_CACHE: jnp.ndarray | None = None
+_RAY_WAVELENGTH_CACHE: jnp.ndarray | None = None
 
 # Some required constants
 PI = np.pi
@@ -62,9 +63,10 @@ def _clear_cache():
 
 # Clear global data helper function
 def reset_registry():
-    global _RAY_ENTRIES, _RAY_SIGMA_CACHE
+    global _RAY_ENTRIES, _RAY_SIGMA_CACHE, _RAY_WAVELENGTH_CACHE
     _RAY_ENTRIES = ()
     _RAY_SIGMA_CACHE = None
+    _RAY_WAVELENGTH_CACHE = None
     _clear_cache()
 
 # Check if Rayleigh data exists helper functions
@@ -220,7 +222,7 @@ def _compute_species_sigma(name: str, wl_um: np.ndarray) -> np.ndarray:
 
 # Calculate and set the global Rayleigh cross section data caches
 def load_ray_registry(cfg, obs, lam_master: Optional[np.ndarray] = None) -> None:
-    global _RAY_ENTRIES, _RAY_SIGMA_CACHE
+    global _RAY_ENTRIES, _RAY_SIGMA_CACHE, _RAY_WAVELENGTH_CACHE
     entries: List[RayRegistryEntry] = []
     config = getattr(cfg.opac, "ray", None)
     if not config:
@@ -236,13 +238,13 @@ def load_ray_registry(cfg, obs, lam_master: Optional[np.ndarray] = None) -> None
         log_xs = np.log10(xs)
 
         # Create entry with NumPy arrays (will be converted to JAX later)
-        # Mixed precision: float64 for wavelengths (better accuracy), float32 for cross sections
+        # Float64 for wavelengths and cross sections.
         entries.append(
             RayRegistryEntry(
                 name=name,
                 idx=index,
                 wavelengths=wavelengths.astype(np.float64),
-                cross_sections=log_xs.astype(np.float32),
+                cross_sections=log_xs.astype(np.float64),
             )
         )
 
@@ -256,16 +258,16 @@ def load_ray_registry(cfg, obs, lam_master: Optional[np.ndarray] = None) -> None
     # ============================================================================
     # All preprocessing is done in NumPy (CPU). Now we send the final data
     # to the device (GPU/CPU as configured) for use in JIT-compiled forward model.
-    # Mixed precision strategy:
-    #   - float64 for wavelengths → better interpolation accuracy
-    #   - float32 for cross sections → halves memory usage
+    # Float64 strategy for wavelengths and cross sections to keep dtype consistent.
     # ============================================================================
 
     print(f"[Ray] Transferring {len(_RAY_ENTRIES)} species to device...")
 
-    # Stack cross sections: (n_species, nwl) - already float32 from preprocessing
+    # Stack cross sections: (n_species, nwl) - already float64 from preprocessing
     sigma_stacked = np.stack([entry.cross_sections for entry in _RAY_ENTRIES], axis=0)
-    _RAY_SIGMA_CACHE = jnp.asarray(sigma_stacked, dtype=jnp.float32)
+    _RAY_SIGMA_CACHE = jnp.asarray(sigma_stacked, dtype=jnp.float64)
+
+    _RAY_WAVELENGTH_CACHE = jnp.asarray(_RAY_ENTRIES[0].wavelengths, dtype=jnp.float64)
 
     print(f"[Ray] Cross section cache: {_RAY_SIGMA_CACHE.shape} (dtype: {_RAY_SIGMA_CACHE.dtype})")
 
@@ -285,9 +287,9 @@ def ray_species_names() -> Tuple[str, ...]:
 
 @lru_cache(None)
 def ray_master_wavelength() -> jnp.ndarray:
-    if not _RAY_ENTRIES:
+    if _RAY_WAVELENGTH_CACHE is None:
         raise RuntimeError("Rayleigh registry empty; call build_opacities() first.")
-    return _RAY_ENTRIES[0].wavelengths
+    return _RAY_WAVELENGTH_CACHE
 
 
 @lru_cache(None)
@@ -299,8 +301,11 @@ def ray_sigma_table() -> jnp.ndarray:
 
 @lru_cache(None)
 def ray_pick_arrays():
-    if not _RAY_ENTRIES:
+    if _RAY_SIGMA_CACHE is None:
         raise RuntimeError("Rayleigh registry empty; call build_opacities() first.")
-    picks_wavelengths = tuple((lambda _=None, wl=entry.wavelengths: wl) for entry in _RAY_ENTRIES)
-    picks_sigma = tuple((lambda _=None, xs=entry.cross_sections: xs) for entry in _RAY_ENTRIES)
+    n_species = int(_RAY_SIGMA_CACHE.shape[0])
+    wavelengths = ray_master_wavelength()
+    sigma = ray_sigma_table()
+    picks_wavelengths = tuple((lambda _=None, wl=wavelengths: wl) for _ in range(n_species))
+    picks_sigma = tuple((lambda _=None, xs=sigma[i]: xs) for i in range(n_species))
     return picks_wavelengths, picks_sigma

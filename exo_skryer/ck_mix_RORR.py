@@ -145,14 +145,17 @@ def mix_k_tables_rorr(
     # OPTIMIZATION: Pre-compute ROM weights ONCE (not n_layers * n_wl times!)
     rom_weights = jnp.outer(base_weights, base_weights).reshape(-1)
 
-    # sigma_values: (n_species, n_layers, n_wavelength, n_g) -> (n_layers, n_wl, n_species, n_g)
-    sigma_reordered = sigma_values.transpose(1, 2, 0, 3)
-    vmr_layers = mixing_ratios.T  # (n_layers, n_species)
+    wl_indices = jnp.arange(n_wl)
 
-    def _mix_one_layer(sigma_layer: jnp.ndarray, vmr_layer: jnp.ndarray) -> jnp.ndarray:
-        # sigma_layer: (n_wl, n_species, n_g) -> vmap over wavelengths
-        return jax.vmap(_rom_mix_band, in_axes=(0, None, None, None, None))(
-            sigma_layer, vmr_layer, g_points, base_weights, rom_weights
-        )
+    def _mix_one_layer(layer_idx: jnp.ndarray) -> jnp.ndarray:
+        vmr_layer = mixing_ratios[:, layer_idx]
+        def _scan_body(carry, wl_idx):
+            sigma_band = sigma_values[:, layer_idx, wl_idx, :]
+            mixed = _rom_mix_band(sigma_band, vmr_layer, g_points, base_weights, rom_weights)
+            return carry, mixed
 
-    return jax.vmap(_mix_one_layer, in_axes=(0, 0))(sigma_reordered, vmr_layers)
+        _, mixed_by_wl = lax.scan(_scan_body, 0, wl_indices)
+        return mixed_by_wl
+
+    layer_indices = jnp.arange(n_layers)
+    return jax.vmap(_mix_one_layer, in_axes=0)(layer_indices)

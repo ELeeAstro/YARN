@@ -43,7 +43,7 @@ class CKRegistryEntry:
     wavelengths: np.ndarray      # NumPy during preprocessing (float64) - (n_wavelength,)
     g_points: np.ndarray         # NumPy during preprocessing (float64) - (n_g,)
     g_weights: np.ndarray        # NumPy during preprocessing (float64) - (n_g,) - quadrature weights
-    cross_sections: np.ndarray   # NumPy during preprocessing (float32) - (n_temperature, n_pressure, n_wavelength, n_g)
+    cross_sections: np.ndarray   # NumPy during preprocessing (float32 to save memory) - (n_temperature, n_pressure, n_wavelength, n_g)
 
 
 # Global registries and caches for forward model
@@ -52,6 +52,8 @@ _CK_SIGMA_CACHE: jnp.ndarray | None = None
 _CK_TEMPERATURE_CACHE: jnp.ndarray | None = None
 _CK_G_POINTS_CACHE: jnp.ndarray | None = None
 _CK_G_WEIGHTS_CACHE: jnp.ndarray | None = None
+_CK_WAVELENGTH_CACHE: jnp.ndarray | None = None
+_CK_PRESSURE_CACHE: jnp.ndarray | None = None
 
 
 # Clear all the cache entries
@@ -67,13 +69,16 @@ def _clear_cache():
 
 
 # Reset all the global registries
-def reset_registry():
+def reset_registry() -> None:
     global _CK_ENTRIES, _CK_SIGMA_CACHE, _CK_TEMPERATURE_CACHE, _CK_G_POINTS_CACHE, _CK_G_WEIGHTS_CACHE
+    global _CK_WAVELENGTH_CACHE, _CK_PRESSURE_CACHE
     _CK_ENTRIES = ()
     _CK_SIGMA_CACHE = None
     _CK_TEMPERATURE_CACHE = None
     _CK_G_POINTS_CACHE = None
     _CK_G_WEIGHTS_CACHE = None
+    _CK_WAVELENGTH_CACHE = None
+    _CK_PRESSURE_CACHE = None
     _clear_cache()
 
 # Check if the registries are set or not
@@ -170,12 +175,12 @@ def _load_ck_h5(index: int, spec, path: str, obs: dict, use_full_grid: bool = Fa
     kcoeff_cut = kcoeff_transposed[:, :, mask, :]
 
     # Convert to log10 (handle zeros by setting minimum value)
-    # Use float32 to save memory (log10 cross sections don't need float64 precision)
+    # Use float32 for log10 cross sections to save memory.
     min_xs = 1e-99  # corresponds to log10 = -99
     kcoeff_log = np.log10(np.maximum(kcoeff_cut, min_xs)).astype(np.float32)
 
     # Return a dataclass with NumPy arrays (will be converted to JAX later)
-    # Mixed precision: float64 for grids (better interpolation accuracy), float32 for cross sections
+    # Mixed precision: float64 for grids, float32 for cross sections to save memory.
     return CKRegistryEntry(
         name=name,
         idx=index,
@@ -184,7 +189,7 @@ def _load_ck_h5(index: int, spec, path: str, obs: dict, use_full_grid: bool = Fa
         wavelengths=wavelengths_cut.astype(np.float64),
         g_points=g_points.astype(np.float64),
         g_weights=weights.astype(np.float64),
-        cross_sections=kcoeff_log,  # Already float32
+        cross_sections=kcoeff_log,
     )
 
 
@@ -251,7 +256,7 @@ def _load_ck_npz(index: int, spec, path: str, obs: dict, use_full_grid: bool = F
         print(f"[c-k] Using full wavelength grid for {name}: {wavelengths.size} bins")
 
     # Return a dataclass with NumPy arrays (will be converted to JAX later)
-    # Mixed precision: float64 for grids (better interpolation accuracy), float32 for cross sections
+    # Mixed precision: float64 for grids, float32 for cross sections to save memory.
     return CKRegistryEntry(
         name=name,
         idx=index,
@@ -260,7 +265,7 @@ def _load_ck_npz(index: int, spec, path: str, obs: dict, use_full_grid: bool = F
         wavelengths=wavelengths.astype(np.float64),
         g_points=g_points.astype(np.float64),
         g_weights=g_weights.astype(np.float64),
-        cross_sections=cross_section.astype(np.float32),  # float32 to save memory
+        cross_sections=cross_section.astype(np.float32),
     )
 
 
@@ -339,6 +344,7 @@ def load_ck_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_dir
 
     # Allocate the global scope caches
     global _CK_ENTRIES, _CK_SIGMA_CACHE, _CK_TEMPERATURE_CACHE, _CK_G_POINTS_CACHE, _CK_G_WEIGHTS_CACHE
+    global _CK_WAVELENGTH_CACHE, _CK_PRESSURE_CACHE
 
     entries: List[CKRegistryEntry] = []
 
@@ -394,8 +400,8 @@ def load_ck_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_dir
     # All preprocessing is done in NumPy (CPU). Now we send the final data
     # to the device (GPU/CPU as configured) for use in JIT-compiled forward model.
     # Mixed precision strategy:
-    #   - float64 for grids (pressures, temperatures, wavelengths, g_points, g_weights) → better interpolation accuracy
-    #   - float32 for cross sections → halves memory usage
+    #   - float64 for grids (pressures, temperatures, wavelengths, g-points, g-weights) → better interpolation accuracy
+    #   - float32 for cross sections → halves memory usage (especially important with extra g dimension)
     # ============================================================================
 
     print(f"[c-k] Transferring {len(_CK_ENTRIES)} species to device...")
@@ -415,6 +421,9 @@ def load_ck_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_dir
     # Stack g-weights: (n_species, ng) - keep as float64 for accuracy
     g_weights_stacked = np.stack([entry.g_weights for entry in _CK_ENTRIES], axis=0)
     _CK_G_WEIGHTS_CACHE = jnp.asarray(g_weights_stacked, dtype=jnp.float64)
+
+    _CK_WAVELENGTH_CACHE = jnp.asarray(_CK_ENTRIES[0].wavelengths, dtype=jnp.float64)
+    _CK_PRESSURE_CACHE = jnp.asarray(_CK_ENTRIES[0].pressures, dtype=jnp.float64)
 
     print(f"[c-k] Cross section cache: {_CK_SIGMA_CACHE.shape} (dtype: {_CK_SIGMA_CACHE.dtype})")
     print(f"[c-k] Temperature cache: {_CK_TEMPERATURE_CACHE.shape} (dtype: {_CK_TEMPERATURE_CACHE.dtype})")
@@ -440,16 +449,16 @@ def ck_species_names() -> Tuple[str, ...]:
 
 @lru_cache(None)
 def ck_master_wavelength() -> jnp.ndarray:
-    if not _CK_ENTRIES:
-        raise RuntimeError("c-k registry empty; call build_opacities() first.")
-    return _CK_ENTRIES[0].wavelengths
+    if _CK_WAVELENGTH_CACHE is None:
+        raise RuntimeError("CK registry empty; call build_opacities() first.")
+    return _CK_WAVELENGTH_CACHE
 
 
 @lru_cache(None)
 def ck_pressure_grid() -> jnp.ndarray:
-    if not _CK_ENTRIES:
-        raise RuntimeError("c-k registry empty; call build_opacities() first.")
-    return _CK_ENTRIES[0].pressures
+    if _CK_PRESSURE_CACHE is None:
+        raise RuntimeError("CK registry empty; call build_opacities() first.")
+    return _CK_PRESSURE_CACHE
 
 
 @lru_cache(None)

@@ -152,7 +152,7 @@ def latin_hypercube(
     n_dim: int,
     *,
     scramble: bool = True,
-    dtype=jnp.float32,
+    dtype=jnp.float64,
 ) -> tuple[jnp.ndarray, jax.Array]:
     """Generate Latin hypercube samples in the unit hypercube [0, 1)^n_dim.
 
@@ -204,4 +204,3 @@ def latin_hypercube(
 
     cols = jax.vmap(_permute_one, in_axes=(0, 0))(base.T, perm_keys)  # (n_dim, n_samples)
     return cols.T, key
-

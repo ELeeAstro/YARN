@@ -75,30 +75,13 @@ def main() -> None:
         # GPU: Set CUDA device and optimization flags
         cuda_devices = str(cfg.runtime.cuda_visible_devices)
         os.environ["CUDA_VISIBLE_DEVICES"] = cuda_devices
+        os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+        os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.75")
         print(f"[info] Platform: GPU (CUDA_VISIBLE_DEVICES={cuda_devices})")
-
-        # GPU optimization flags
-        xla_flags = (
-            "--xla_gpu_strict_conv_algorithm_picker=false "
-            "--xla_gpu_enable_fast_min_max=true "
-            "--xla_gpu_enable_latency_hiding_scheduler=true "
-            "--xla_gpu_autotune_level=4 "
-            "--xla_gpu_deterministic_ops=false"
-        )
-        os.environ["XLA_FLAGS"] = xla_flags
-
-        # GPU memory management
-        os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-        os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.9"
-
-        print(f"[info] XLA GPU: autotune_level=4, latency hiding, non-deterministic ops")
-        print(f"[info] First GPU run will be slower (auto-tuning), then cached")
 
     # Print main yaml parameters to command line (after setting environment)
     from .help_print import print_cfg
     print_cfg(cfg)
-    #os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-    #os.environ["TF_GPU_ALLOCATOR=cuda_malloc_async"] = "cuda_malloc_async"
 
     # Prepare JAX and numpyro JAX settings
     from jax import config as jax_config
@@ -190,10 +173,10 @@ def main() -> None:
         from .sampler_blackjax_NS import run_nested_blackjax
         samples_dict, evidence_info = run_nested_blackjax(cfg, prep, exp_dir)
 
-    elif engine == "pymultinest":
-        # PyMultiNest nested-sampling driver
-        from .sampler_pymultinest_NS import run_nested_pymultinest
-        samples_dict, evidence_info = run_nested_pymultinest(cfg, prep, exp_dir)
+    elif engine == "ultranest":
+        # UltraNest nested-sampling driver
+        from .sampler_ultranest_NS import run_nested_ultranest
+        samples_dict, evidence_info = run_nested_ultranest(cfg, prep, exp_dir)
 
     elif engine == "dynesty":
         # Dynesty nested-sampling driver
@@ -201,7 +184,7 @@ def main() -> None:
         samples_dict, evidence_info = run_nested_dynesty(cfg, prep, exp_dir)
 
     else:
-        raise ValueError(f"Unknown sampling.engine: {engine!r}. Options: nuts, jaxns, blackjax_ns, pymultinest, dynesty")
+        raise ValueError("Unknown sampling.engine: {engine!r}. Options: nuts, jaxns, blackjax_ns, ultranest, dynesty")
 
     print(f"[info] Finished Sampling")
 

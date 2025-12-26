@@ -52,20 +52,21 @@ lam_min = 0.125
 # Dataclass containing the CIA table data
 # Note: During preprocessing, all arrays are NumPy (CPU)
 # They get converted to JAX (device) only at the final cache creation step
-# Mixed precision: float64 for grids (better accuracy), float32 for cross sections (memory savings)
+# Float64 throughout for grids and cross sections.
 @dataclass(frozen=True)
 class CiaRegistryEntry:
     name: str
     idx: int
     temperatures: np.ndarray    # NumPy during preprocessing (float64)
     wavelengths: np.ndarray     # NumPy during preprocessing (float64)
-    cross_sections: np.ndarray  # NumPy during preprocessing (float32 to save memory)
+    cross_sections: np.ndarray  # NumPy during preprocessing (float64)
 
 
 # Global scope cache data array
 _CIA_ENTRIES: Tuple[CiaRegistryEntry, ...] = ()
 _CIA_SIGMA_CACHE: jnp.ndarray | None = None
 _CIA_TEMPERATURE_CACHE: jnp.ndarray | None = None
+_CIA_WAVELENGTH_CACHE: jnp.ndarray | None = None
 
 # Clear cache helper function
 def _clear_cache():
@@ -79,9 +80,11 @@ def _clear_cache():
 # Reset all registry values
 def reset_registry():
     global _CIA_ENTRIES, _CIA_SIGMA_CACHE, _CIA_TEMPERATURE_CACHE
+    global _CIA_WAVELENGTH_CACHE
     _CIA_ENTRIES = ()
     _CIA_SIGMA_CACHE = None
     _CIA_TEMPERATURE_CACHE = None
+    _CIA_WAVELENGTH_CACHE = None
     _clear_cache()
 
 # Helper function to check if data is in the global cache
@@ -125,22 +128,22 @@ def _load_cia_npz(index: int, path: str, target_wavelengths: np.ndarray) -> CiaR
         )
 
     # Interpolate to the master wavelength grid
-    # Use float32 to save memory (log10 cross sections don't need float64 precision)
+    # Use float64 for log10 cross sections to keep dtype consistent.
     n_temperatures, _ = native_xs.shape
     wavelength_count = target_wavelengths.size
-    xs_interp = np.empty((n_temperatures, wavelength_count), dtype=np.float32)
+    xs_interp = np.empty((n_temperatures, wavelength_count), dtype=np.float64)
     for idx_temp in range(n_temperatures):
         xs_interp[idx_temp, :] = np.interp(target_wavelengths, native_wavelengths, native_xs[idx_temp, :], left=-199.0, right=-199.0)
     xs_interp = np.maximum(xs_interp, -199.0)
 
     # Return a CIA table registry entry with NumPy arrays (will be converted to JAX later)
-    # Mixed precision: float64 for grids (better interpolation accuracy), float32 for cross sections
+    # Float64 for grids and cross sections.
     return CiaRegistryEntry(
         name=name,
         idx=index,
         temperatures=temperatures.astype(np.float64),
         wavelengths=target_wavelengths.astype(np.float64),
-        cross_sections=xs_interp,  # Already float32
+        cross_sections=xs_interp,
     )
 
 # Pad the tables to a rectangle (in dimension) - usually only in T as wavelength grids are the same lengths
@@ -193,8 +196,8 @@ def _build_hminus_cia_entry(index: int, target_wavelengths: np.ndarray, spec) ->
     valid = (lam >= lam_min_base) & (lam <= lam0_base)
 
     # Start with everything floored in log10 space
-    # Use float32 to save memory (log10 cross sections don't need float64 precision)
-    log10_sigma = np.full((nT, lam.size), floor, dtype=np.float32)
+    # Use float64 for log10 cross sections to keep dtype consistent.
+    log10_sigma = np.full((nT, lam.size), floor, dtype=np.float64)
 
     if np.any(valid):
         lam_v = lam[valid]
@@ -210,7 +213,7 @@ def _build_hminus_cia_entry(index: int, target_wavelengths: np.ndarray, spec) ->
 
         # Convert to log10 safely and broadcast across T (this snippet is λ-only)
         with np.errstate(divide="ignore", invalid="ignore"):
-            log10_v = np.where(xbf_v > 0.0, np.log10(xbf_v), floor).astype(np.float32)
+            log10_v = np.where(xbf_v > 0.0, np.log10(xbf_v), floor).astype(np.float64)
 
         log10_sigma[:, valid] = log10_v[None, :]
 
@@ -218,13 +221,13 @@ def _build_hminus_cia_entry(index: int, target_wavelengths: np.ndarray, spec) ->
     log10_sigma = np.maximum(log10_sigma, floor)
 
     # Return NumPy arrays (will be converted to JAX later)
-    # Mixed precision: float64 for grids (better interpolation accuracy), float32 for cross sections
+    # Float64 for grids and cross sections.
     return CiaRegistryEntry(
         name="H-",
         idx=index,
         temperatures=T.astype(np.float64),
         wavelengths=lam.astype(np.float64),
-        cross_sections=log10_sigma,  # Already float32
+        cross_sections=log10_sigma,
     )
 
 
@@ -232,7 +235,7 @@ def _build_hminus_cia_entry(index: int, target_wavelengths: np.ndarray, spec) ->
 def load_cia_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_dir: Optional[Path] = None) -> None:
 
     # Initialise the global caches
-    global _CIA_ENTRIES, _CIA_SIGMA_CACHE, _CIA_TEMPERATURE_CACHE
+    global _CIA_ENTRIES, _CIA_SIGMA_CACHE, _CIA_TEMPERATURE_CACHE, _CIA_WAVELENGTH_CACHE
     entries: List[CiaRegistryEntry] = []
     config = getattr(cfg.opac, "cia", None)
     if not config:
@@ -272,19 +275,20 @@ def load_cia_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_di
     # All preprocessing is done in NumPy (CPU). Now we send the final data
     # to the device (GPU/CPU as configured) for use in JIT-compiled forward model.
     # Mixed precision strategy:
-    #   - float64 for grids (temperatures, wavelengths) → better interpolation accuracy
-    #   - float32 for cross sections → halves memory usage
+    # Float64 for grids and cross sections.
     # ============================================================================
 
     print(f"[CIA] Transferring {len(_CIA_ENTRIES)} species to device...")
 
-    # Stack cross sections: (n_species, nT, nwl) - already float32 from preprocessing
+    # Stack cross sections: (n_species, nT, nwl) - already float64 from preprocessing
     sigma_stacked = np.stack([entry.cross_sections for entry in _CIA_ENTRIES], axis=0)
-    _CIA_SIGMA_CACHE = jnp.asarray(sigma_stacked, dtype=jnp.float32)
+    _CIA_SIGMA_CACHE = jnp.asarray(sigma_stacked, dtype=jnp.float64)
 
     # Stack temperature grids: (n_species, nT) - keep as float64 for accuracy
     temp_stacked = np.stack([entry.temperatures for entry in _CIA_ENTRIES], axis=0)
     _CIA_TEMPERATURE_CACHE = jnp.asarray(temp_stacked, dtype=jnp.float64)
+
+    _CIA_WAVELENGTH_CACHE = jnp.asarray(_CIA_ENTRIES[0].wavelengths, dtype=jnp.float64)
 
     print(f"[CIA] Cross section cache: {_CIA_SIGMA_CACHE.shape} (dtype: {_CIA_SIGMA_CACHE.dtype})")
     print(f"[CIA] Temperature cache: {_CIA_TEMPERATURE_CACHE.shape} (dtype: {_CIA_TEMPERATURE_CACHE.dtype})")
@@ -308,9 +312,9 @@ def cia_species_names() -> Tuple[str, ...]:
 
 @lru_cache(None)
 def cia_master_wavelength() -> jnp.ndarray:
-    if not _CIA_ENTRIES:
+    if _CIA_WAVELENGTH_CACHE is None:
         raise RuntimeError("CIA registry empty; call build_opacities() first.")
-    return _CIA_ENTRIES[0].wavelengths
+    return _CIA_WAVELENGTH_CACHE
 
 
 @lru_cache(None)
@@ -334,8 +338,11 @@ def cia_temperature_grid() -> jnp.ndarray:
 
 @lru_cache(None)
 def cia_pick_arrays():
-    if not _CIA_ENTRIES:
+    if _CIA_SIGMA_CACHE is None or _CIA_TEMPERATURE_CACHE is None:
         raise RuntimeError("CIA registry empty; call build_opacities() first.")
-    picks_temperatures = tuple((lambda _=None, temperatures=entry.temperatures: temperatures) for entry in _CIA_ENTRIES)
-    picks_sigma = tuple((lambda _=None, sigma=entry.cross_sections: sigma) for entry in _CIA_ENTRIES)
+    n_species = int(_CIA_SIGMA_CACHE.shape[0])
+    temperatures = cia_temperature_grids()
+    sigma = cia_sigma_cube()
+    picks_temperatures = tuple((lambda _=None, t=temperatures[i]: t) for i in range(n_species))
+    picks_sigma = tuple((lambda _=None, s=sigma[i]: s) for i in range(n_species))
     return picks_temperatures, picks_sigma

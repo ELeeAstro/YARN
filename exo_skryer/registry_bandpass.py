@@ -376,4 +376,3 @@ def bandpass_norms() -> jnp.ndarray:
     if _BAND_NORM_CACHE is None:
         raise RuntimeError("Bandpass norms not built; call load_bandpass_registry() first.")
     return _BAND_NORM_CACHE
-

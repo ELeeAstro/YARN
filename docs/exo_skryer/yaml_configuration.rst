@@ -337,7 +337,7 @@ Configures the nested sampling or MCMC algorithm.
 .. code-block:: yaml
 
    sampling:
-     engine: jaxns                 # Sampler choice (jaxns, nuts, blackjax_ns)
+     engine: jaxns                 # Sampler choice (jaxns, nuts, blackjax_ns, ultranest, dynesty)
 
      nuts:                         # NUTS/MCMC settings (if engine: nuts)
        backend: numpyro
@@ -375,6 +375,20 @@ Configures the nested sampling or MCMC algorithm.
        dlogz_stop: 0.01
        seed: 42
 
+     ultranest:                    # UltraNest settings
+       num_live_points: 500
+       min_num_live_points: 500
+       dlogz: 0.5
+       max_iters: 0
+       verbose: true
+       show_status: true
+
+     dynesty:                      # Dynesty settings
+       nlive: 500
+       bound: multi
+       sample: auto
+       dlogz: 1.0
+
 **Engine Selection:**
 
 - ``engine`` (string): Sampling algorithm
@@ -382,6 +396,8 @@ Configures the nested sampling or MCMC algorithm.
   - ``jaxns``: Nested sampling with JAXNS (recommended for evidence)
   - ``nuts``: NUTS/HMC with NumPyro (recommended for posterior only)
   - ``blackjax_ns``: Nested sampling with BlackJAX
+  - ``ultranest``: Nested sampling with UltraNest
+  - ``dynesty``: Nested sampling with Dynesty
 
 **JAXNS Settings:**
 

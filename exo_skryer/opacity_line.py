@@ -61,10 +61,9 @@ def _interpolate_sigma(layer_pressures_bar: jnp.ndarray, layer_temperatures: jnp
     temperature_grids = XS.line_temperature_grids()
 
     # Convert to log10 space for interpolation
-    sigma_dtype = sigma_cube.dtype
-    log_p_grid = jnp.log10(pressure_grid).astype(sigma_dtype)
-    log_p_layers = jnp.log10(layer_pressures_bar).astype(sigma_dtype)
-    log_t_layers = jnp.log10(layer_temperatures).astype(sigma_dtype)
+    log_p_grid = jnp.log10(pressure_grid)
+    log_p_layers = jnp.log10(layer_pressures_bar)
+    log_t_layers = jnp.log10(layer_temperatures)
 
     # Find pressure bracket indices and weights in log space (same for all species)
     p_idx = jnp.searchsorted(log_p_grid, log_p_layers) - 1
@@ -229,7 +228,7 @@ def compute_line_opacity(state: Dict[str, jnp.ndarray], params: Dict[str, jnp.nd
     mixing_ratios = jnp.stack(
         [jnp.broadcast_to(layer_vmr[name], (layer_count,)) for name in species_names],
         axis=0,
-    ).astype(sigma_cube.dtype)
+    ).astype(jnp.float64)
 
     layer_pressures_bar = layer_pressures / 1e6
     log_p_grid = jnp.log10(pressure_grid)
@@ -242,7 +241,7 @@ def compute_line_opacity(state: Dict[str, jnp.ndarray], params: Dict[str, jnp.nd
     p_weight = jnp.clip(p_weight, 0.0, 1.0)
 
     def _interp_one_species(sigma_3d, temp_grid):
-        log_t_grid = jnp.log10(temp_grid).astype(sigma_3d.dtype)
+        log_t_grid = jnp.log10(temp_grid)
         t_idx = jnp.searchsorted(log_t_grid, log_t_layers) - 1
         t_idx = jnp.clip(t_idx, 0, log_t_grid.shape[0] - 2)
         t_weight = (log_t_layers - log_t_grid[t_idx]) / (log_t_grid[t_idx + 1] - log_t_grid[t_idx])
@@ -256,7 +255,8 @@ def compute_line_opacity(state: Dict[str, jnp.ndarray], params: Dict[str, jnp.nd
         s_t0 = (1.0 - p_weight)[:, None] * s_t0_p0 + p_weight[:, None] * s_t0_p1
         s_t1 = (1.0 - p_weight)[:, None] * s_t1_p0 + p_weight[:, None] * s_t1_p1
         s_interp = (1.0 - t_weight)[:, None] * s_t0 + t_weight[:, None] * s_t1
-        return (10.0 ** s_interp).astype(sigma_3d.dtype)
+        s_interp64 = s_interp.astype(jnp.float64)
+        return 10.0 ** s_interp64
 
     def _scan_body(carry, inputs):
         sigma_3d, temp_grid, vmr = inputs
@@ -265,10 +265,11 @@ def compute_line_opacity(state: Dict[str, jnp.ndarray], params: Dict[str, jnp.nd
         return carry, None
 
     nwl = sigma_cube.shape[-1]
-    weighted_sigma_init = jnp.zeros((layer_count, nwl), dtype=sigma_cube.dtype)
+    weighted_sigma_init = jnp.zeros((layer_count, nwl), dtype=jnp.float64)
     weighted_sigma, _ = jax.lax.scan(
         _scan_body,
         weighted_sigma_init,
         (sigma_cube, temperature_grids, mixing_ratios),
     )
-    return weighted_sigma / (layer_mu[:, None] * amu)
+    layer_mu64 = layer_mu.astype(jnp.float64)
+    return weighted_sigma / (layer_mu64[:, None] * amu)

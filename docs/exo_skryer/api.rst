@@ -106,6 +106,12 @@ Reference/API
 .. automodapi:: exo_skryer.sampler_jaxns_NS
     :no-inheritance-diagram:
 
+.. automodapi:: exo_skryer.sampler_ultranest_NS
+    :no-inheritance-diagram:
+
+.. automodapi:: exo_skryer.sampler_dynesty_NS
+    :no-inheritance-diagram:
+
 .. automodapi:: exo_skryer.sampler_numpyro_MCMC
     :no-inheritance-diagram:
 

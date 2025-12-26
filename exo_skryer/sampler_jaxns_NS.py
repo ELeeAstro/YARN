@@ -28,6 +28,9 @@ __all__ = [
 ]
 
 
+def sigmoid(x):
+    return 1.0 / (1.0 + jnp.exp(-x))
+
 def make_jaxns_model(cfg, prep: Prepared) -> Model:
     """
     Build a JAXNS Model from the YAML config (cfg) and Prepared object (prep).
@@ -70,7 +73,21 @@ def make_jaxns_model(cfg, prep: Prepared) -> Model:
             if dist_name in ("uniform",):
                 low = float(getattr(p, "low"))
                 high = float(getattr(p, "high"))
-                theta = yield Prior(tfpd.Uniform(low=low, high=high), name=name)
+                transform = str(getattr(p, "transform", "identity")).lower()
+
+                if transform == "logit":
+                    # Sample unconstrained raw variable
+                    raw_name = f"{name}__raw"
+                    z = yield Prior(tfpd.Logistic(loc=0.0, scale=1.0), name=raw_name)
+
+                    # Map to (low, high)
+                    # (clip avoids exactly 0/1 which can produce infs in downstream inverse ops)
+                    t = jnp.clip(sigmoid(z), 1e-12, 1.0 - 1e-12)
+                    theta = low + (high - low) * t
+
+                else:
+                    theta = yield Prior(tfpd.Uniform(low=low, high=high), name=name)
+
             elif dist_name in ("gaussian", "normal"):
                 mu = float(getattr(p, "mu"))
                 sigma = float(getattr(p, "sigma"))
@@ -92,27 +109,32 @@ def make_jaxns_model(cfg, prep: Prepared) -> Model:
     # ----- Split-normal (asymmetric Gaussian) log-likelihood -----
     @jax.jit
     def log_likelihood(theta_map):
-        mu = prep.fm(theta_map)     # (N,)
-        r  = y_obs - mu             # (N,)
+        mu = prep.fm(theta_map)  # (N,)
+        valid = jnp.all(jnp.isfinite(mu))
 
-        c = theta_map.get("c", -99.0)          # scalar: log10(sigma_jit)
-        sig_jit = 10.0**c      # = 10^c
-        sig_jit2 = sig_jit * sig_jit      # = 10^(2c)
+        def valid_ll(_):
+            r = y_obs - mu
 
-        # inflate BOTH sides in quadrature
-        sigp_eff = jnp.sqrt(dy_obs_p**2 + sig_jit2)
-        sigm_eff = jnp.sqrt(dy_obs_m**2 + sig_jit2)
+            c = theta_map.get("c", -99.0)
+            sig_jit2 = (10.0**c) ** 2
 
-        # choose side for exponent
-        sig_eff = jnp.where(r >= 0.0, sigp_eff, sigm_eff)
+            sigp_eff = jnp.sqrt(dy_obs_p**2 + sig_jit2)
+            sigm_eff = jnp.sqrt(dy_obs_m**2 + sig_jit2)
+            sig_eff  = jnp.where(r >= 0.0, sigp_eff, sigm_eff)
 
-        # normalisation must use the SAME effective scales
-        norm = jnp.clip(sigm_eff + sigp_eff, 1e-300, jnp.inf)
-        sig_eff = jnp.clip(sig_eff, 1e-300, jnp.inf)
+            norm    = jnp.clip(sigm_eff + sigp_eff, 1e-300, jnp.inf)
+            sig_eff = jnp.clip(sig_eff, 1e-300, jnp.inf)
 
-        logC = 0.5 * jnp.log(2.0 / jnp.pi) - jnp.log(norm)
+            logC = 0.5 * jnp.log(2.0 / jnp.pi) - jnp.log(norm)
+            ll = jnp.sum(logC - 0.5 * (r / sig_eff) ** 2)
 
-        return jnp.sum(logC - 0.5 * (r / sig_eff) ** 2)
+            return jnp.where(jnp.isfinite(ll), ll, -1e100)
+
+        def invalid_ll(_):
+            return -1e100
+
+        return jax.lax.cond(valid, valid_ll, invalid_ll, operand=None)
+
 
     return Model(prior_model=prior_model, log_likelihood=log_likelihood)
 
@@ -237,11 +259,29 @@ def run_nested_jaxns(
     # ---- convert to your standard samples_dict format ----
     samples_dict: Dict[str, np.ndarray] = {}
 
-    # Bayesian parameters
     for p in cfg.params:
         name = p.name
-        if name in eq_samples:
-            samples_dict[name] = np.asarray(eq_samples[name])
+        dist_name = str(getattr(p, "dist", "")).lower()
+        transform = str(getattr(p, "transform", "identity")).lower()
+
+        if dist_name == "delta":
+            continue
+
+        if transform == "logit" and dist_name == "uniform":
+            low = float(getattr(p, "low"))
+            high = float(getattr(p, "high"))
+            raw_name = f"{name}__raw"
+
+            if raw_name in eq_samples:
+                z = jnp.asarray(eq_samples[raw_name])
+                t = jnp.clip(1.0 / (1.0 + jnp.exp(-z)), 1e-12, 1.0 - 1e-12)
+                x = low + (high - low) * t
+                samples_dict[name] = np.asarray(x)
+                # optional: keep raw too
+                # samples_dict[raw_name] = np.asarray(z)
+        else:
+            if name in eq_samples:
+                samples_dict[name] = np.asarray(eq_samples[name])
 
     # Fixed / delta parameters
     for p in cfg.params:

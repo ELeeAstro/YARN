@@ -25,7 +25,7 @@ def _pras_mix_band(
     n_samples = g_points.shape[0] * g_points.shape[0]
     n_species = sigma_stack_log.shape[0]
 
-    gs_mat, _ = latin_hypercube(key, n_samples, n_species, scramble=True, dtype=jnp.float32)
+    gs_mat, _ = latin_hypercube(key, n_samples, n_species, scramble=True, dtype=jnp.float64)
     u_by_species = gs_mat.T  # (n_species, n_samples)
 
     sigma_stack_log = jnp.maximum(sigma_stack_log, -99.0)
@@ -39,7 +39,7 @@ def _pras_mix_band(
     cs_tot = jnp.maximum(cs_tot, 1e-99)
 
     cs_sorted = jnp.sort(cs_tot)
-    g_mid = (jnp.arange(n_samples, dtype=jnp.float32) + 0.5) / jnp.asarray(n_samples, dtype=jnp.float32)
+    g_mid = (jnp.arange(n_samples, dtype=jnp.float64) + 0.5) / jnp.asarray(n_samples, dtype=jnp.float64)
     return jnp.interp(g_points, g_mid, cs_sorted)
 
 
@@ -58,19 +58,21 @@ def mix_k_tables_pras(
     if mixing_ratios.ndim == 1:
         mixing_ratios = jnp.broadcast_to(mixing_ratios[:, None], (n_species, n_layers))
 
-    sigma_reordered = sigma_values_log.transpose(1, 2, 0, 3)  # (n_layers, n_wl, n_species, n_g)
-    vmr_layers = mixing_ratios.T  # (n_layers, n_species)
     base_key = jax.random.PRNGKey(0)
     wl_indices = jnp.arange(n_wl)
 
-    def _mix_one_layer(layer_index: jnp.ndarray, sigma_layer: jnp.ndarray, vmr_layer: jnp.ndarray) -> jnp.ndarray:
+    def _mix_one_layer(layer_index: jnp.ndarray) -> jnp.ndarray:
+        vmr_layer = mixing_ratios[:, layer_index]
         key_layer = jax.random.fold_in(base_key, layer_index)
 
-        def _mix_one_wl(wl_index: jnp.ndarray, sigma_band: jnp.ndarray) -> jnp.ndarray:
+        def _scan_body(carry, wl_index):
+            sigma_band = sigma_values_log[:, layer_index, wl_index, :]
             key = jax.random.fold_in(key_layer, wl_index)
-            return _pras_mix_band(sigma_band, vmr_layer, g_points, base_weights, key)
+            mixed = _pras_mix_band(sigma_band, vmr_layer, g_points, base_weights, key)
+            return carry, mixed
 
-        return jax.vmap(_mix_one_wl, in_axes=(0, 0))(wl_indices, sigma_layer)
+        _, mixed_by_wl = jax.lax.scan(_scan_body, 0, wl_indices)
+        return mixed_by_wl
 
     layer_indices = jnp.arange(n_layers)
-    return jax.vmap(_mix_one_layer, in_axes=(0, 0, 0))(layer_indices, sigma_reordered, vmr_layers)
+    return jax.vmap(_mix_one_layer, in_axes=0)(layer_indices)

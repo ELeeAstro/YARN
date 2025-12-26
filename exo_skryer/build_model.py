@@ -27,8 +27,11 @@ from .opacity_cloud import zero_cloud_opacity, grey_cloud, powerlaw_cloud, F18_c
 from . import build_opacities as XS
 from .build_chem import prepare_chemistry_kernel
 
-from .RT_trans_1D import compute_transit_depth_1d
-from .RT_em_1D import compute_emission_spectrum_1d
+from .RT_trans_1D_ck import compute_transit_depth_1d_ck
+from .RT_trans_1D_lbl import compute_transit_depth_1d_lbl
+from .RT_em_1D_ck import compute_emission_spectrum_1d_ck
+from .RT_em_1D_lbl import compute_emission_spectrum_1d_lbl
+from .RT_em_schemes import get_emission_solver
 
 from .instru_convolve import apply_response_functions
 
@@ -215,6 +218,11 @@ def build_forward_model(
         print(f"[info] Line opacity is None:", line_opac_scheme)
         line_opac_kernel = None
     elif line_opac_scheme_str.lower() == "lbl":
+        if not XS.has_line_data():
+            raise RuntimeError(
+                "Line opacity requested but registry is empty. "
+                "Check cfg.opac.line and ensure build_opacities() loaded line tables."
+            )
         line_opac_kernel = compute_line_opacity
     elif line_opac_scheme_str.lower() == "ck":
         ck = True
@@ -270,17 +278,28 @@ def build_forward_model(
     special_opac_scheme_str = str(special_opac_scheme).lower()
     if special_opac_scheme_str in ("none", "off", "false", "0"):
         special_opac_kernel = None
-    else:
+    elif special_opac_scheme_str in ("on", "lbl", "ck"):
         special_opac_kernel = compute_special_opacity
+    else:
+        raise NotImplementedError(f"Unknown opac_special='{special_opac_scheme}'")
 
     rt_raw = getattr(phys, "rt_scheme", None)
     if rt_raw in (None, "None"):
         raise ValueError("physics.rt_scheme must be specified explicitly.")
     rt_scheme = str(rt_raw).lower()
     if rt_scheme == "transit_1d":
-        rt_kernel = compute_transit_depth_1d
+        rt_kernel = compute_transit_depth_1d_ck if ck else compute_transit_depth_1d_lbl
     elif rt_scheme == "emission_1d":
-        rt_kernel = compute_emission_spectrum_1d
+        em_scheme = getattr(phys, "em_scheme", "eaa")
+        emission_solver = get_emission_solver(em_scheme)
+        if ck:
+            rt_kernel = lambda state, params, components: compute_emission_spectrum_1d_ck(
+                state, params, components, emission_solver=emission_solver
+            )
+        else:
+            rt_kernel = lambda state, params, components: compute_emission_spectrum_1d_lbl(
+                state, params, components, emission_solver=emission_solver
+            )
     else:
         raise NotImplementedError(f"Unknown rt_scheme='{rt_scheme}'")
 
@@ -363,7 +382,6 @@ def build_forward_model(
                 ck_mix_code = 1
 
         state = {
-            "ck": ck,
             "nwl": nwl,
             "nlay": nlay,
             "wl": wl,

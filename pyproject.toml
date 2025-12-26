@@ -41,15 +41,15 @@ docs = [
     "matplotlib",
     "tox"
 ]
-pymultinest = [
-    "pymultinest"
-]
 dynesty = [
     "dynesty"
 ]
+ultranest = [
+    "ultranest"
+]
 nested_sampling = [
-    "pymultinest",
-    "dynesty"
+    "dynesty",
+    "ultranest"
 ]
 
 [project.urls]

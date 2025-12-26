@@ -12,14 +12,17 @@ import jax.numpy as jnp
 from .data_constants import amu, kb
 from .rate_jax import RateJAX, get_gibbs_cache
 
-solar_h2 = 0.5
-solar_he = 10.0**(10.914-12.0)
-solar_h2_he = solar_h2 + solar_he
+
 
 # Solar reference abundances (relative to H) - Asplund et al. (2021)
+solar_H = 1.0
+solar_He = 10.0**(10.914-12.0)
 solar_O = 10.0**(8.69-12.0)
 solar_C = 10.0**(8.46-12.0)
 solar_N = 10.0**(7.83-12.0)
+
+solar_H2 = solar_H/2.0
+solar_He_H2 = solar_He/solar_H2 
 
 __all__ = [
     "constant_vmr",
@@ -58,13 +61,6 @@ def constant_vmr(species_order: tuple[str, ...]):
         - nlay : Number of atmospheric layers
 
         And returns a dictionary mapping species names to their VMR profiles.
-
-    Notes
-    -----
-    The background atmosphere (H2/He) is computed to ensure total VMR sums to 1.0,
-    with H2/He ratio fixed at solar values. This is more efficient than the generic
-    version because it avoids runtime dictionary iteration, which is unfriendly to
-    JAX's JIT compiler.
     """
     param_keys = tuple(f"log_10_f_{s}" for s in species_order)
 
@@ -73,13 +69,15 @@ def constant_vmr(species_order: tuple[str, ...]):
 
         # Convert log10 abundances to VMR values
         values = [10.0 ** params[k] for k in param_keys]
-        trace = jnp.stack(values, axis=0) if values else jnp.zeros((0,), dtype=jnp.float32)
+        trace = jnp.stack(values, axis=0) if values else jnp.zeros((0,), dtype=jnp.float64)
         background = 1.0 - jnp.sum(trace) if values else 1.0
 
         # Build VMR dictionary with constant profiles for each species
         vmr = {s: jnp.full((nlay,), trace[i]) for i, s in enumerate(species_order)}
-        vmr["H2"] = jnp.full((nlay,), background * (solar_h2 / solar_h2_he))
-        vmr["He"] = jnp.full((nlay,), background * (solar_he / solar_h2_he))
+        H2 =  background  / (1.0 +  solar_He_H2)
+        vmr["H2"] = jnp.full((nlay,), H2)
+        He = H2 * solar_He_H2
+        vmr["He"] = jnp.full((nlay,), He)
         return vmr
 
     return _constant_vmr_kernel

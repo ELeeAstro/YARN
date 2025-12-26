@@ -57,10 +57,19 @@ def build_joint_prior_distrax(cfg) -> Tuple[distrax.Distribution, List[str]]:
         param_names.append(param.name)
 
         if param.dist == "uniform":
-            distributions[param.name] = distrax.Uniform(
-                low=float(param.low),
-                high=float(param.high)
-            )
+            low = float(param.low)
+            high = float(param.high)
+            transform = str(getattr(param, "transform", "identity")).lower()
+            if transform == "logit":
+                bijector = distrax.Chain(
+                    [distrax.ScalarAffine(shift=low, scale=high - low), distrax.Sigmoid()]
+                )
+                distributions[param.name] = distrax.Transformed(
+                    distrax.Logistic(loc=0.0, scale=1.0),
+                    bijector
+                )
+            else:
+                distributions[param.name] = distrax.Uniform(low=low, high=high)
         elif param.dist == "normal":
             distributions[param.name] = distrax.Normal(
                 loc=float(param.mu),
@@ -127,26 +136,36 @@ def run_nested_blackjax(cfg, prep: Prepared, exp_dir: Path) -> Tuple[Dict[str, n
     @jax.jit
     def loglikelihood_fn(params):
         mu = prep.fm(params)     # (N,)
-        r  = y_obs - mu             # (N,)
+        valid = jnp.all(jnp.isfinite(mu))
 
-        c = params.get("c", -99.0)          # scalar: log10(sigma_jit)
-        sig_jit = 10.0**c      # = 10^c
-        sig_jit2 = sig_jit * sig_jit      # = 10^(2c)
+        def invalid_ll(_):
+            return -1e100
 
-        # inflate BOTH sides in quadrature
-        sigp_eff = jnp.sqrt(dy_obs_p**2 + sig_jit2)
-        sigm_eff = jnp.sqrt(dy_obs_m**2 + sig_jit2)
+        def valid_ll(_):
+            r  = y_obs - mu             # (N,)
 
-        # choose side for exponent
-        sig_eff = jnp.where(r >= 0.0, sigp_eff, sigm_eff)
+            c = params.get("c", -99.0)          # scalar: log10(sigma_jit)
+            sig_jit = 10.0**c      # = 10^c
+            sig_jit2 = sig_jit * sig_jit      # = 10^(2c)
 
-        # normalisation must use the SAME effective scales
-        norm = jnp.clip(sigm_eff + sigp_eff, 1e-300, jnp.inf)
-        sig_eff = jnp.clip(sig_eff, 1e-300, jnp.inf)
+            # inflate BOTH sides in quadrature
+            sigp_eff = jnp.sqrt(dy_obs_p**2 + sig_jit2)
+            sigm_eff = jnp.sqrt(dy_obs_m**2 + sig_jit2)
 
-        logC = 0.5 * jnp.log(2.0 / jnp.pi) - jnp.log(norm)
+            # choose side for exponent
+            sig_eff = jnp.where(r >= 0.0, sigp_eff, sigm_eff)
 
-        return jnp.sum(logC - 0.5 * (r / sig_eff) ** 2)
+            # normalisation must use the SAME effective scales
+            norm = jnp.clip(sigm_eff + sigp_eff, 1e-300, jnp.inf)
+            sig_eff = jnp.clip(sig_eff, 1e-300, jnp.inf)
+
+            logC = 0.5 * jnp.log(2.0 / jnp.pi) - jnp.log(norm)
+
+            ll = jnp.sum(logC - 0.5 * (r / sig_eff) ** 2)
+
+            return jnp.where(jnp.isfinite(ll), ll, -1e100)
+
+        return jax.lax.cond(valid, valid_ll, invalid_ll, operand=None)
     
     nested_sampler = blackjax.nss(
         logprior_fn=prior.log_prob,
