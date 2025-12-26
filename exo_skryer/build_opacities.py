@@ -11,7 +11,6 @@ from .registry_line import (
     LineRegistryEntry,
     has_line_data,
     line_master_wavelength,
-    line_pick_arrays,
     line_pressure_grid,
     line_sigma_cube,
     line_species_names,
@@ -37,7 +36,6 @@ from .registry_ck import (
 from .registry_cia import (
     CiaRegistryEntry,
     cia_master_wavelength,
-    cia_pick_arrays,
     cia_sigma_cube,
     cia_species_names,
     cia_temperature_grid,
@@ -53,7 +51,6 @@ from .registry_ray import (
     ray_sigma_table,
     ray_species_names,
     load_ray_registry,
-    ray_pick_arrays,
     reset_registry as reset_ray_registry,
 )
 
@@ -236,7 +233,6 @@ __all__ = [
     "line_temperature_grid",
     "line_temperature_grids",
     "line_sigma_cube",
-    "line_pick_arrays",
     "line_species_names",
     "load_line_registry",
     "ck_master_wavelength",
@@ -254,10 +250,8 @@ __all__ = [
     "cia_temperature_grid",
     "cia_temperature_grids",
     "cia_sigma_cube",
-    "cia_pick_arrays",
     "cia_species_names",
     "ray_master_wavelength",
     "ray_sigma_table",
     "ray_species_names",
-    "ray_pick_arrays",
 ]

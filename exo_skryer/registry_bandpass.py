@@ -12,6 +12,7 @@ from typing import Tuple, List
 
 import numpy as np
 import jax.numpy as jnp
+from scipy.integrate import simpson
 
 
 __all__ = [
@@ -226,7 +227,7 @@ def load_bandpass_registry(
 
         # Norm = ∫ w(λ) dλ over the actual slice; keeps numerator/denominator consistent
         if wl_slice.size > 1:
-            norm = float(np.trapezoid(weights_slice, x=wl_slice))
+            norm = float(simpson(weights_slice, x=wl_slice))
         else:
             norm = 1.0
 

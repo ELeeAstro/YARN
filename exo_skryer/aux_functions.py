@@ -3,10 +3,16 @@ aux_functions.py
 ================
 '''
 
+from __future__ import annotations
+
 import jax
 import jax.numpy as jnp
+import functools
+from typing import Optional, Literal
 
-__all__ = ['pchip_1d', 'latin_hypercube']
+
+
+__all__ = ['pchip_1d', 'latin_hypercube', 'simpson']
 
 
 def _pchip_slopes(x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
@@ -204,3 +210,170 @@ def latin_hypercube(
 
     cols = jax.vmap(_permute_one, in_axes=(0, 0))(base.T, perm_keys)  # (n_dim, n_samples)
     return cols.T, key
+
+
+EvenMode = Optional[Literal["simpson", "avg", "first", "last"]]
+
+
+def _as_last_axis(a: jnp.ndarray, axis: int) -> jnp.ndarray:
+    return jnp.moveaxis(a, axis, -1)
+
+
+def _trapz_last(y: jnp.ndarray, x: Optional[jnp.ndarray], dx: float) -> jnp.ndarray:
+    # y shape (..., N>=2)
+    y0 = y[..., -2]
+    y1 = y[..., -1]
+    if x is None:
+        h = jnp.asarray(dx, dtype=y.dtype)
+    else:
+        h = x[..., -1] - x[..., -2]
+    return 0.5 * h * (y0 + y1)
+
+
+def _trapz_first(y: jnp.ndarray, x: Optional[jnp.ndarray], dx: float) -> jnp.ndarray:
+    # y shape (..., N>=2)
+    y0 = y[..., 0]
+    y1 = y[..., 1]
+    if x is None:
+        h = jnp.asarray(dx, dtype=y.dtype)
+    else:
+        h = x[..., 1] - x[..., 0]
+    return 0.5 * h * (y0 + y1)
+
+
+def _simpson_odd_uniform(y: jnp.ndarray, dx: float) -> jnp.ndarray:
+    # y shape (..., N) with N odd >= 3
+    n = y.shape[-1]
+    y0 = y[..., 0]
+    yN = y[..., -1]
+    odd_sum = jnp.sum(y[..., 1:n-1:2], axis=-1)
+    even_sum = jnp.sum(y[..., 2:n-1:2], axis=-1)
+    return (jnp.asarray(dx, dtype=y.dtype) / 3.0) * (y0 + yN + 4.0 * odd_sum + 2.0 * even_sum)
+
+
+def _simpson_odd_unequal(y: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
+    # y, x shape (..., N) with N odd >= 3
+    # Composite Simpson for irregular spacing:
+    # sum over pairs of intervals with widths h0, h1:
+    #  (h0+h1)/6 * [ (2 - h1/h0) y0 + ((h0+h1)^2/(h0*h1)) y1 + (2 - h0/h1) y2 ]
+    h = jnp.diff(x, axis=-1)              # (..., N-1)
+    h0 = h[..., 0::2]                     # (..., (N-1)/2)
+    h1 = h[..., 1::2]                     # (..., (N-1)/2)
+
+    y0 = y[..., 0:-2:2]
+    y1 = y[..., 1:-1:2]
+    y2 = y[..., 2::2]
+
+    hsum = h0 + h1
+    term0 = (2.0 - (h1 / h0)) * y0
+    term1 = ((hsum * hsum) / (h0 * h1)) * y1
+    term2 = (2.0 - (h0 / h1)) * y2
+
+    return jnp.sum((hsum / 6.0) * (term0 + term1 + term2), axis=-1)
+
+
+def _simpson_odd(y: jnp.ndarray, x: Optional[jnp.ndarray], dx: float) -> jnp.ndarray:
+    if x is None:
+        return _simpson_odd_uniform(y, dx)
+    return _simpson_odd_unequal(y, x)
+
+
+def _simpson_even_cartwright_last_interval(y: jnp.ndarray, x: Optional[jnp.ndarray], dx: float) -> jnp.ndarray:
+    # “simpson” behaviour for even N: Simpson on first N-1 points + special last-interval correction
+    # Uses last three points. For uniform spacing this reduces to:
+    #   dx * (5/12*y[-1] + 2/3*y[-2] - 1/12*y[-3])
+    if x is None:
+        h = jnp.asarray(dx, dtype=y.dtype)
+        return h * ((5.0/12.0) * y[..., -1] + (2.0/3.0) * y[..., -2] - (1.0/12.0) * y[..., -3])
+
+    h0 = x[..., -2] - x[..., -3]
+    h1 = x[..., -1] - x[..., -2]
+
+    alpha = (2.0 * h1 * h1 + 3.0 * h0 * h1) / (6.0 * (h0 + h1))
+    beta  = (h1 * h1 + 3.0 * h0 * h1)       / (6.0 * h0)
+    eta   = (h1 * h1 * h1)                  / (6.0 * h0 * (h0 + h1))
+
+    return alpha * y[..., -1] + beta * y[..., -2] - eta * y[..., -3]
+
+
+@functools.partial(jax.jit, static_argnames=("axis", "even"))
+def simpson(
+    y,
+    *,
+    x: Optional[jnp.ndarray] = None,
+    dx: float = 1.0,
+    axis: int = -1,
+    even: EvenMode = None,   # None behaves like SciPy default ("simpson" in modern SciPy)
+):
+    """
+    JAX-compatible composite Simpson integrator, similar to scipy.integrate.simpson.
+
+    Parameters
+    ----------
+    y : array_like
+        Values to integrate.
+    x : array_like, optional
+        Sample points. If 1D, must have length y.shape[axis]. If broadcastable, must match y.
+    dx : float
+        Spacing used when x is None.
+    axis : int
+        Axis of integration.
+    even : {None, 'simpson', 'avg', 'first', 'last'}
+        Handling when number of samples is even. Matches SciPy's documented behaviours. :contentReference[oaicite:2]{index=2}
+    """
+    y = jnp.asarray(y)
+    y = _as_last_axis(y, axis)
+    n = y.shape[-1]
+
+    # Prepare x in "last-axis" layout, broadcasted to y if provided.
+    if x is not None:
+        x = jnp.asarray(x)
+        if x.ndim == 1:
+            # broadcast to y's leading dims
+            x = jnp.broadcast_to(x, y.shape)
+        else:
+            x = _as_last_axis(x, axis)
+            x = jnp.broadcast_to(x, y.shape)
+
+    # Degenerate cases
+    if n == 0:
+        return jnp.zeros(y.shape[:-1], dtype=y.dtype)
+    if n == 1:
+        return jnp.zeros(y.shape[:-1], dtype=y.dtype)
+    if n == 2:
+        # Simpson not possible; fall back to trapezoid (SciPy does this in the even='simpson' path too). :contentReference[oaicite:3]{index=3}
+        return _trapz_last(y, x, dx)
+
+    # Odd number of samples: standard composite Simpson
+    if (n % 2) == 1:
+        return _simpson_odd(y, x, dx)
+
+    # Even number of samples: choose strategy
+    mode = "simpson" if even is None else even
+
+    if mode == "first":
+        # Simpson over first N-1 points + trapezoid on last interval
+        base = _simpson_odd(y[..., :-1], None if x is None else x[..., :-1], dx)
+        return base + _trapz_last(y, x, dx)
+
+    if mode == "last":
+        # trapezoid on first interval + Simpson over last N-1 points
+        base = _simpson_odd(y[..., 1:], None if x is None else x[..., 1:], dx)
+        return _trapz_first(y, x, dx) + base
+
+    if mode == "avg":
+        # average of 'first' and 'last' (SciPy docs) :contentReference[oaicite:4]{index=4}
+        first = (
+            _simpson_odd(y[..., :-1], None if x is None else x[..., :-1], dx) +
+            _trapz_last(y, x, dx)
+        )
+        last = (
+            _trapz_first(y, x, dx) +
+            _simpson_odd(y[..., 1:], None if x is None else x[..., 1:], dx)
+        )
+        return 0.5 * (first + last)
+
+    # mode == "simpson": Simpson over first N-1 points + Cartwright-style last-interval correction (SciPy docs) :contentReference[oaicite:5]{index=5}
+    base = _simpson_odd(y[..., :-1], None if x is None else x[..., :-1], dx)
+    corr = _simpson_even_cartwright_last_interval(y, x, dx)
+    return base + corr

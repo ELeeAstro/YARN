@@ -26,7 +26,6 @@ __all__ = [
     "line_temperature_grid",
     "line_temperature_grids",
     "line_sigma_cube",
-    "line_pick_arrays",
 ]
 
 
@@ -45,7 +44,7 @@ class LineRegistryEntry:
 
 
 # Global registries and caches for forward model
-_LINE_ENTRIES: Tuple[LineRegistryEntry, ...] = ()
+_LINE_SPECIES_NAMES: Tuple[str, ...] = ()  # Lightweight: only species names (few bytes)
 _LINE_SIGMA_CACHE: jnp.ndarray | None = None
 _LINE_TEMPERATURE_CACHE: jnp.ndarray | None = None
 _LINE_WAVELENGTH_CACHE: jnp.ndarray | None = None
@@ -59,12 +58,11 @@ def _clear_cache():
     line_temperature_grid.cache_clear()
     line_temperature_grids.cache_clear()
     line_sigma_cube.cache_clear()
-    line_pick_arrays.cache_clear()
 
 # Reset all the global registries
 def reset_registry() -> None:
-    global _LINE_ENTRIES, _LINE_SIGMA_CACHE, _LINE_TEMPERATURE_CACHE, _LINE_WAVELENGTH_CACHE, _LINE_PRESSURE_CACHE
-    _LINE_ENTRIES = ()
+    global _LINE_SPECIES_NAMES, _LINE_SIGMA_CACHE, _LINE_TEMPERATURE_CACHE, _LINE_WAVELENGTH_CACHE, _LINE_PRESSURE_CACHE
+    _LINE_SPECIES_NAMES = ()
     _LINE_SIGMA_CACHE = None
     _LINE_TEMPERATURE_CACHE = None
     _LINE_WAVELENGTH_CACHE = None
@@ -73,7 +71,7 @@ def reset_registry() -> None:
 
 # Check if the registries are set or not
 def has_line_data() -> bool:
-    return bool(_LINE_ENTRIES)
+    return _LINE_SIGMA_CACHE is not None
 
 # Function to load TauREx HDF5 opacity data
 def _load_line_h5(index: int, path: str, target_wavelengths: np.ndarray) -> LineRegistryEntry:
@@ -134,7 +132,7 @@ def _load_line_h5(index: int, path: str, target_wavelengths: np.ndarray) -> Line
 
     # Interpolate to target wavelength grid
     # Use float32 to save memory (log10 cross sections don't need float64 precision)
-    xs_interp = np.empty((n_temperatures, n_pressures, wavelength_count), dtype=np.float32)
+    xs_interp = np.empty((n_temperatures, n_pressures, wavelength_count), dtype=np.float64)
     for iT in range(n_temperatures):
         for iP in range(n_pressures):
             xs_interp[iT, iP, :] = np.interp(
@@ -153,7 +151,7 @@ def _load_line_h5(index: int, path: str, target_wavelengths: np.ndarray) -> Line
         pressures=pressures.astype(np.float64),
         temperatures=temperatures.astype(np.float64),
         wavelengths=target_wavelengths.astype(np.float64),
-        cross_sections=xs_interp,  # Already float32
+        cross_sections=xs_interp.astype(np.float64),  # Already float32
     )
 
 
@@ -200,10 +198,10 @@ def _load_line_npz(index: int, path: str, target_wavelengths: np.ndarray) -> Lin
         raise ValueError("Target wavelength grid must be 1D.")
 
     if native_wavelengths.shape == target_wavelengths.shape and np.allclose(native_wavelengths, target_wavelengths):
-        xs_interp = xs.astype(np.float32)
+        xs_interp = xs
     else:
         # Use float32 to save memory
-        xs_interp = np.empty((n_temperatures, n_pressures, target_wavelengths.size), dtype=np.float32)
+        xs_interp = np.empty((n_temperatures, n_pressures, target_wavelengths.size), dtype=np.float64)
         for iT in range(n_temperatures):
             for iP in range(n_pressures):
                 xs_interp[iT, iP, :] = np.interp(
@@ -222,7 +220,7 @@ def _load_line_npz(index: int, path: str, target_wavelengths: np.ndarray) -> Lin
         pressures=pressures.astype(np.float64),
         temperatures=temperatures.astype(np.float64),
         wavelengths=target_wavelengths.astype(np.float64),
-        cross_sections=xs_interp,  # Already float32
+        cross_sections=xs_interp.astype(np.float64),  # Already float32
     )
 
 # Pad the tables to a rectangle (in dimension) - usually only in T as wavelength and pressure grids are the same lengths
@@ -281,7 +279,7 @@ def _rectangularize_entries(entries: List[LineRegistryEntry]) -> Tuple[LineRegis
 def load_line_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_dir: Optional[Path] = None):
 
     # Allocate the global scope caches
-    global _LINE_ENTRIES, _LINE_SIGMA_CACHE, _LINE_TEMPERATURE_CACHE, _LINE_WAVELENGTH_CACHE, _LINE_PRESSURE_CACHE
+    global _LINE_SPECIES_NAMES, _LINE_SIGMA_CACHE, _LINE_TEMPERATURE_CACHE, _LINE_WAVELENGTH_CACHE, _LINE_PRESSURE_CACHE
 
     entries: List[LineRegistryEntry] = []
 
@@ -314,8 +312,8 @@ def load_line_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_d
         entries.append(entry)
 
     # Now need to pad in the temperature dimension to make all grids to the same size (for JAX)
-    _LINE_ENTRIES = _rectangularize_entries(entries)
-    if not _LINE_ENTRIES:
+    rectangularized_entries = _rectangularize_entries(entries)
+    if not rectangularized_entries:
         reset_registry()
         return
 
@@ -329,19 +327,19 @@ def load_line_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_d
     #   - float32 for cross sections → halves memory usage (~4 GB → ~2 GB for large grids)
     # ============================================================================
 
-    print(f"[Line] Transferring {len(_LINE_ENTRIES)} species to device...")
+    print(f"[Line] Transferring {len(rectangularized_entries)} species to device...")
 
     # Stack cross sections: (n_species, nT, nP, nwl) - already float32 from preprocessing
-    sigma_stacked = np.stack([entry.cross_sections for entry in _LINE_ENTRIES], axis=0)
-    _LINE_SIGMA_CACHE = jnp.asarray(sigma_stacked, dtype=jnp.float32)
+    sigma_stacked = np.stack([entry.cross_sections for entry in rectangularized_entries], axis=0)
+    _LINE_SIGMA_CACHE = jnp.asarray(sigma_stacked, dtype=jnp.float64)
 
     # Stack temperature grids: (n_species, nT) - keep as float64 for accuracy
-    temp_stacked = np.stack([entry.temperatures for entry in _LINE_ENTRIES], axis=0)
+    temp_stacked = np.stack([entry.temperatures for entry in rectangularized_entries], axis=0)
     _LINE_TEMPERATURE_CACHE = jnp.asarray(temp_stacked, dtype=jnp.float64)
 
     # Wavelength and pressure grids: all species share the same grids (rectangularized)
-    _LINE_WAVELENGTH_CACHE = jnp.asarray(_LINE_ENTRIES[0].wavelengths, dtype=jnp.float64)
-    _LINE_PRESSURE_CACHE = jnp.asarray(_LINE_ENTRIES[0].pressures, dtype=jnp.float64)
+    _LINE_WAVELENGTH_CACHE = jnp.asarray(rectangularized_entries[0].wavelengths, dtype=jnp.float64)
+    _LINE_PRESSURE_CACHE = jnp.asarray(rectangularized_entries[0].pressures, dtype=jnp.float64)
 
     print(f"[Line] Cross section cache: {_LINE_SIGMA_CACHE.shape} (dtype: {_LINE_SIGMA_CACHE.dtype})")
     print(f"[Line] Temperature cache: {_LINE_TEMPERATURE_CACHE.shape} (dtype: {_LINE_TEMPERATURE_CACHE.dtype})")
@@ -354,13 +352,23 @@ def load_line_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_d
     total_mb = sigma_mb + temp_mb + wl_mb + p_mb
     print(f"[Line] Estimated device memory: {total_mb:.1f} MB (σ: {sigma_mb:.1f} MB, T: {temp_mb:.2f} MB, λ: {wl_mb:.2f} MB, P: {p_mb:.2f} MB)")
 
+    # Extract species names (lightweight: just strings)
+    _LINE_SPECIES_NAMES = tuple(entry.name for entry in rectangularized_entries)
+
+    # Delete NumPy arrays to free memory (JAX caches now hold the data on device)
+    # This saves ~100s of MB for typical opacity tables
+    del rectangularized_entries, entries, sigma_stacked, temp_stacked
+    print(f"[Line] Freed NumPy temporary arrays from CPU memory")
+
     _clear_cache()
 
 ### -- lru cached helper functions below --- ###
 
 @lru_cache(None)
 def line_species_names() -> Tuple[str, ...]:
-    return tuple(entry.name for entry in _LINE_ENTRIES)
+    if not _LINE_SPECIES_NAMES:
+        raise RuntimeError("Line registry empty; call build_opacities() first.")
+    return _LINE_SPECIES_NAMES
 
 
 @lru_cache(None)
@@ -394,13 +402,3 @@ def line_sigma_cube() -> jnp.ndarray:
     if _LINE_SIGMA_CACHE is None:
         raise RuntimeError("Line σ cube not built; call build_opacities() first.")
     return _LINE_SIGMA_CACHE
-
-
-@lru_cache(None)
-def line_pick_arrays():
-    if not _LINE_ENTRIES:
-        raise RuntimeError("Line registry empty; call build_opacities() first.")
-    picks_pressures = tuple((lambda _=None, pressures=entry.pressures: pressures) for entry in _LINE_ENTRIES)
-    picks_temperatures = tuple((lambda _=None, temperatures=entry.temperatures: temperatures) for entry in _LINE_ENTRIES)
-    picks_sigma = tuple((lambda _=None, sigma=entry.cross_sections: sigma) for entry in _LINE_ENTRIES)
-    return picks_pressures, picks_temperatures, picks_sigma

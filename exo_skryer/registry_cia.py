@@ -23,7 +23,6 @@ __all__ = [
     "cia_sigma_cube",
     "cia_temperature_grid",
     "cia_temperature_grids",
-    "cia_pick_arrays",
 ]
 
 
@@ -63,7 +62,7 @@ class CiaRegistryEntry:
 
 
 # Global scope cache data array
-_CIA_ENTRIES: Tuple[CiaRegistryEntry, ...] = ()
+_CIA_SPECIES_NAMES: Tuple[str, ...] = ()  # Lightweight: only species names (few bytes)
 _CIA_SIGMA_CACHE: jnp.ndarray | None = None
 _CIA_TEMPERATURE_CACHE: jnp.ndarray | None = None
 _CIA_WAVELENGTH_CACHE: jnp.ndarray | None = None
@@ -75,13 +74,12 @@ def _clear_cache():
     cia_temperature_grids.cache_clear()
     cia_temperature_grid.cache_clear()
     cia_sigma_cube.cache_clear()
-    cia_pick_arrays.cache_clear()
 
 # Reset all registry values
 def reset_registry():
-    global _CIA_ENTRIES, _CIA_SIGMA_CACHE, _CIA_TEMPERATURE_CACHE
+    global _CIA_SPECIES_NAMES, _CIA_SIGMA_CACHE, _CIA_TEMPERATURE_CACHE
     global _CIA_WAVELENGTH_CACHE
-    _CIA_ENTRIES = ()
+    _CIA_SPECIES_NAMES = ()
     _CIA_SIGMA_CACHE = None
     _CIA_TEMPERATURE_CACHE = None
     _CIA_WAVELENGTH_CACHE = None
@@ -89,7 +87,7 @@ def reset_registry():
 
 # Helper function to check if data is in the global cache
 def has_cia_data() -> bool:
-    return bool(_CIA_ENTRIES)
+    return _CIA_SIGMA_CACHE is not None
 
 # Load the CIA cross section data from the formatted npz files
 def _load_cia_npz(index: int, path: str, target_wavelengths: np.ndarray) -> CiaRegistryEntry:
@@ -235,7 +233,7 @@ def _build_hminus_cia_entry(index: int, target_wavelengths: np.ndarray, spec) ->
 def load_cia_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_dir: Optional[Path] = None) -> None:
 
     # Initialise the global caches
-    global _CIA_ENTRIES, _CIA_SIGMA_CACHE, _CIA_TEMPERATURE_CACHE, _CIA_WAVELENGTH_CACHE
+    global _CIA_SPECIES_NAMES, _CIA_SIGMA_CACHE, _CIA_TEMPERATURE_CACHE, _CIA_WAVELENGTH_CACHE
     entries: List[CiaRegistryEntry] = []
     config = getattr(cfg.opac, "cia", None)
     if not config:
@@ -264,8 +262,8 @@ def load_cia_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_di
         entries.append(entry)
 
     # For JAX, need to pad to make the tables rectangular with the same nummber of T grids
-    _CIA_ENTRIES = _rectangularize_entries(entries)
-    if not _CIA_ENTRIES:
+    rectangularized_entries = _rectangularize_entries(entries)
+    if not rectangularized_entries:
         reset_registry()
         return
 
@@ -278,17 +276,17 @@ def load_cia_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_di
     # Float64 for grids and cross sections.
     # ============================================================================
 
-    print(f"[CIA] Transferring {len(_CIA_ENTRIES)} species to device...")
+    print(f"[CIA] Transferring {len(rectangularized_entries)} species to device...")
 
     # Stack cross sections: (n_species, nT, nwl) - already float64 from preprocessing
-    sigma_stacked = np.stack([entry.cross_sections for entry in _CIA_ENTRIES], axis=0)
+    sigma_stacked = np.stack([entry.cross_sections for entry in rectangularized_entries], axis=0)
     _CIA_SIGMA_CACHE = jnp.asarray(sigma_stacked, dtype=jnp.float64)
 
     # Stack temperature grids: (n_species, nT) - keep as float64 for accuracy
-    temp_stacked = np.stack([entry.temperatures for entry in _CIA_ENTRIES], axis=0)
+    temp_stacked = np.stack([entry.temperatures for entry in rectangularized_entries], axis=0)
     _CIA_TEMPERATURE_CACHE = jnp.asarray(temp_stacked, dtype=jnp.float64)
 
-    _CIA_WAVELENGTH_CACHE = jnp.asarray(_CIA_ENTRIES[0].wavelengths, dtype=jnp.float64)
+    _CIA_WAVELENGTH_CACHE = jnp.asarray(rectangularized_entries[0].wavelengths, dtype=jnp.float64)
 
     print(f"[CIA] Cross section cache: {_CIA_SIGMA_CACHE.shape} (dtype: {_CIA_SIGMA_CACHE.dtype})")
     print(f"[CIA] Temperature cache: {_CIA_TEMPERATURE_CACHE.shape} (dtype: {_CIA_TEMPERATURE_CACHE.dtype})")
@@ -299,6 +297,14 @@ def load_cia_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_di
     total_mb = sigma_mb + temp_mb
     print(f"[CIA] Estimated device memory: {total_mb:.1f} MB (σ: {sigma_mb:.1f} MB, T: {temp_mb:.1f} MB)")
 
+    # Extract species names (lightweight: just strings)
+    _CIA_SPECIES_NAMES = tuple(entry.name for entry in rectangularized_entries)
+
+    # Delete NumPy arrays to free memory (JAX caches now hold the data on device)
+    # This saves ~50 MB for typical CIA tables
+    del rectangularized_entries, entries, sigma_stacked, temp_stacked
+    print(f"[CIA] Freed NumPy temporary arrays from CPU memory")
+
     _clear_cache()
 
 
@@ -307,7 +313,9 @@ def load_cia_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_di
 
 @lru_cache(None)
 def cia_species_names() -> Tuple[str, ...]:
-    return tuple(entry.name for entry in _CIA_ENTRIES)
+    if not _CIA_SPECIES_NAMES:
+        raise RuntimeError("CIA registry empty; call build_opacities() first.")
+    return _CIA_SPECIES_NAMES
 
 
 @lru_cache(None)
@@ -334,15 +342,3 @@ def cia_temperature_grids() -> jnp.ndarray:
 @lru_cache(None)
 def cia_temperature_grid() -> jnp.ndarray:
     return cia_temperature_grids()[0]
-
-
-@lru_cache(None)
-def cia_pick_arrays():
-    if _CIA_SIGMA_CACHE is None or _CIA_TEMPERATURE_CACHE is None:
-        raise RuntimeError("CIA registry empty; call build_opacities() first.")
-    n_species = int(_CIA_SIGMA_CACHE.shape[0])
-    temperatures = cia_temperature_grids()
-    sigma = cia_sigma_cube()
-    picks_temperatures = tuple((lambda _=None, t=temperatures[i]: t) for i in range(n_species))
-    picks_sigma = tuple((lambda _=None, s=sigma[i]: s) for i in range(n_species))
-    return picks_temperatures, picks_sigma

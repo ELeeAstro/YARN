@@ -139,7 +139,7 @@ def run_nested_blackjax(cfg, prep: Prepared, exp_dir: Path) -> Tuple[Dict[str, n
         valid = jnp.all(jnp.isfinite(mu))
 
         def invalid_ll(_):
-            return -1e100
+            return -jnp.inf
 
         def valid_ll(_):
             r  = y_obs - mu             # (N,)
@@ -163,7 +163,7 @@ def run_nested_blackjax(cfg, prep: Prepared, exp_dir: Path) -> Tuple[Dict[str, n
 
             ll = jnp.sum(logC - 0.5 * (r / sig_eff) ** 2)
 
-            return jnp.where(jnp.isfinite(ll), ll, -1e100)
+            return jnp.where(jnp.isfinite(ll), ll, -jnp.inf)
 
         return jax.lax.cond(valid, valid_ll, invalid_ll, operand=None)
     

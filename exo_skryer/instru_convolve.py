@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 
+from .aux_functions import simpson
 from .registry_bandpass import (
     bandpass_num_bins,
     bandpass_wavelengths_padded,
@@ -30,7 +31,7 @@ def _convolve_spectrum_core(
     """Convolve high-resolution spectrum into observational bins (JIT core).
 
     This function performs the actual convolution calculation using pre-computed
-    padded arrays from the bandpass registry. It uses trapezoidal integration to
+    padded arrays from the bandpass registry. It uses Simpson's rule integration to
     compute the weighted average of the spectrum within each bin.
 
     Parameters
@@ -61,10 +62,10 @@ def _convolve_spectrum_core(
     The convolution is computed as:
     1. Extract spectrum values at sampled wavelengths using `idx_pad`
     2. Multiply by response weights: F(λ) × w(λ)
-    3. Integrate using trapezoidal rule (or simple weighted value for single-point bins)
+    3. Integrate using Simpson's rule (or simple weighted value for single-point bins)
     4. Normalize by integrated throughput
 
-    For bins with only one wavelength point, trapezoidal integration is not applicable.
+    For bins with only one wavelength point, Simpson's rule is not applicable.
     Instead, we use F(λ) × w(λ) directly. Single-point bins are detected when the
     first two wavelengths in a row are identical (indicating padding).
 
@@ -78,8 +79,8 @@ def _convolve_spectrum_core(
     # Single-point bins: use first spectrum value times first weight
     single_point_result = spec_pad[:, 0] * w_pad[:, 0]  # (nbin,)
 
-    # Multi-point bins: use trapezoidal integration
-    multi_point_result = jnp.trapezoid(spec_pad * w_pad, x=wl_pad, axis=1)  # (nbin,)
+    # Multi-point bins: use Simpson's rule integration
+    multi_point_result = simpson(spec_pad * w_pad, x=wl_pad, axis=1)  # (nbin,)
 
     # Combine results based on bin type
     numerator = jnp.where(is_single_point, single_point_result, multi_point_result)

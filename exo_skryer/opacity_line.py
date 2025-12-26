@@ -228,7 +228,7 @@ def compute_line_opacity(state: Dict[str, jnp.ndarray], params: Dict[str, jnp.nd
     mixing_ratios = jnp.stack(
         [jnp.broadcast_to(layer_vmr[name], (layer_count,)) for name in species_names],
         axis=0,
-    ).astype(jnp.float64)
+    )
 
     layer_pressures_bar = layer_pressures / 1e6
     log_p_grid = jnp.log10(pressure_grid)
@@ -255,8 +255,7 @@ def compute_line_opacity(state: Dict[str, jnp.ndarray], params: Dict[str, jnp.nd
         s_t0 = (1.0 - p_weight)[:, None] * s_t0_p0 + p_weight[:, None] * s_t0_p1
         s_t1 = (1.0 - p_weight)[:, None] * s_t1_p0 + p_weight[:, None] * s_t1_p1
         s_interp = (1.0 - t_weight)[:, None] * s_t0 + t_weight[:, None] * s_t1
-        s_interp64 = s_interp.astype(jnp.float64)
-        return 10.0 ** s_interp64
+        return 10.0 ** s_interp
 
     def _scan_body(carry, inputs):
         sigma_3d, temp_grid, vmr = inputs
@@ -271,5 +270,4 @@ def compute_line_opacity(state: Dict[str, jnp.ndarray], params: Dict[str, jnp.nd
         weighted_sigma_init,
         (sigma_cube, temperature_grids, mixing_ratios),
     )
-    layer_mu64 = layer_mu.astype(jnp.float64)
-    return weighted_sigma / (layer_mu64[:, None] * amu)
+    return weighted_sigma / (layer_mu[:, None] * amu)

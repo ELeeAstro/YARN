@@ -47,7 +47,7 @@ class CKRegistryEntry:
 
 
 # Global registries and caches for forward model
-_CK_ENTRIES: Tuple[CKRegistryEntry, ...] = ()
+_CK_SPECIES_NAMES: Tuple[str, ...] = ()  # Lightweight: only species names (few bytes)
 _CK_SIGMA_CACHE: jnp.ndarray | None = None
 _CK_TEMPERATURE_CACHE: jnp.ndarray | None = None
 _CK_G_POINTS_CACHE: jnp.ndarray | None = None
@@ -70,9 +70,9 @@ def _clear_cache():
 
 # Reset all the global registries
 def reset_registry() -> None:
-    global _CK_ENTRIES, _CK_SIGMA_CACHE, _CK_TEMPERATURE_CACHE, _CK_G_POINTS_CACHE, _CK_G_WEIGHTS_CACHE
+    global _CK_SPECIES_NAMES, _CK_SIGMA_CACHE, _CK_TEMPERATURE_CACHE, _CK_G_POINTS_CACHE, _CK_G_WEIGHTS_CACHE
     global _CK_WAVELENGTH_CACHE, _CK_PRESSURE_CACHE
-    _CK_ENTRIES = ()
+    _CK_SPECIES_NAMES = ()
     _CK_SIGMA_CACHE = None
     _CK_TEMPERATURE_CACHE = None
     _CK_G_POINTS_CACHE = None
@@ -83,7 +83,7 @@ def reset_registry() -> None:
 
 # Check if the registries are set or not
 def has_ck_data() -> bool:
-    return bool(_CK_ENTRIES)
+    return _CK_SIGMA_CACHE is not None
 
 # Function to load petitRADTRANS HDF5 correlated-k opacity data
 def _load_ck_h5(index: int, spec, path: str, obs: dict, use_full_grid: bool = False) -> CKRegistryEntry:
@@ -343,7 +343,7 @@ def _rectangularize_entries(entries: List[CKRegistryEntry]) -> Tuple[CKRegistryE
 def load_ck_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_dir: Optional[Path] = None):
 
     # Allocate the global scope caches
-    global _CK_ENTRIES, _CK_SIGMA_CACHE, _CK_TEMPERATURE_CACHE, _CK_G_POINTS_CACHE, _CK_G_WEIGHTS_CACHE
+    global _CK_SPECIES_NAMES, _CK_SIGMA_CACHE, _CK_TEMPERATURE_CACHE, _CK_G_POINTS_CACHE, _CK_G_WEIGHTS_CACHE
     global _CK_WAVELENGTH_CACHE, _CK_PRESSURE_CACHE
 
     entries: List[CKRegistryEntry] = []
@@ -389,8 +389,8 @@ def load_ck_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_dir
         entries.append(entry)
 
     # Now need to pad in the temperature and g dimensions to make all grids to the same size (for JAX)
-    _CK_ENTRIES = _rectangularize_entries(entries)
-    if not _CK_ENTRIES:
+    rectangularized_entries = _rectangularize_entries(entries)
+    if not rectangularized_entries:
         reset_registry()
         return
 
@@ -404,31 +404,31 @@ def load_ck_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_dir
     #   - float32 for cross sections → halves memory usage (especially important with extra g dimension)
     # ============================================================================
 
-    print(f"[c-k] Transferring {len(_CK_ENTRIES)} species to device...")
+    print(f"[CK] Transferring {len(rectangularized_entries)} species to device...")
 
     # Stack cross sections: (n_species, nT, nP, nwl, ng) - already float32 from preprocessing
-    sigma_stacked = np.stack([entry.cross_sections for entry in _CK_ENTRIES], axis=0)
+    sigma_stacked = np.stack([entry.cross_sections for entry in rectangularized_entries], axis=0)
     _CK_SIGMA_CACHE = jnp.asarray(sigma_stacked, dtype=jnp.float32)
 
     # Stack temperature grids: (n_species, nT) - keep as float64 for accuracy
-    temp_stacked = np.stack([entry.temperatures for entry in _CK_ENTRIES], axis=0)
+    temp_stacked = np.stack([entry.temperatures for entry in rectangularized_entries], axis=0)
     _CK_TEMPERATURE_CACHE = jnp.asarray(temp_stacked, dtype=jnp.float64)
 
     # Stack g-points: (n_species, ng) - keep as float64 for accuracy
-    g_points_stacked = np.stack([entry.g_points for entry in _CK_ENTRIES], axis=0)
+    g_points_stacked = np.stack([entry.g_points for entry in rectangularized_entries], axis=0)
     _CK_G_POINTS_CACHE = jnp.asarray(g_points_stacked, dtype=jnp.float64)
 
     # Stack g-weights: (n_species, ng) - keep as float64 for accuracy
-    g_weights_stacked = np.stack([entry.g_weights for entry in _CK_ENTRIES], axis=0)
+    g_weights_stacked = np.stack([entry.g_weights for entry in rectangularized_entries], axis=0)
     _CK_G_WEIGHTS_CACHE = jnp.asarray(g_weights_stacked, dtype=jnp.float64)
 
-    _CK_WAVELENGTH_CACHE = jnp.asarray(_CK_ENTRIES[0].wavelengths, dtype=jnp.float64)
-    _CK_PRESSURE_CACHE = jnp.asarray(_CK_ENTRIES[0].pressures, dtype=jnp.float64)
+    _CK_WAVELENGTH_CACHE = jnp.asarray(rectangularized_entries[0].wavelengths, dtype=jnp.float64)
+    _CK_PRESSURE_CACHE = jnp.asarray(rectangularized_entries[0].pressures, dtype=jnp.float64)
 
-    print(f"[c-k] Cross section cache: {_CK_SIGMA_CACHE.shape} (dtype: {_CK_SIGMA_CACHE.dtype})")
-    print(f"[c-k] Temperature cache: {_CK_TEMPERATURE_CACHE.shape} (dtype: {_CK_TEMPERATURE_CACHE.dtype})")
-    print(f"[c-k] G-points cache: {_CK_G_POINTS_CACHE.shape} (dtype: {_CK_G_POINTS_CACHE.dtype})")
-    print(f"[c-k] G-weights cache: {_CK_G_WEIGHTS_CACHE.shape} (dtype: {_CK_G_WEIGHTS_CACHE.dtype})")
+    print(f"[CK] Cross section cache: {_CK_SIGMA_CACHE.shape} (dtype: {_CK_SIGMA_CACHE.dtype})")
+    print(f"[CK] Temperature cache: {_CK_TEMPERATURE_CACHE.shape} (dtype: {_CK_TEMPERATURE_CACHE.dtype})")
+    print(f"[CK] G-points cache: {_CK_G_POINTS_CACHE.shape} (dtype: {_CK_G_POINTS_CACHE.dtype})")
+    print(f"[CK] G-weights cache: {_CK_G_WEIGHTS_CACHE.shape} (dtype: {_CK_G_WEIGHTS_CACHE.dtype})")
 
     # Estimate memory usage
     sigma_mb = _CK_SIGMA_CACHE.size * _CK_SIGMA_CACHE.itemsize / 1024**2
@@ -436,7 +436,15 @@ def load_ck_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_dir
     g_points_mb = _CK_G_POINTS_CACHE.size * _CK_G_POINTS_CACHE.itemsize / 1024**2
     g_weights_mb = _CK_G_WEIGHTS_CACHE.size * _CK_G_WEIGHTS_CACHE.itemsize / 1024**2
     total_mb = sigma_mb + temp_mb + g_points_mb + g_weights_mb
-    print(f"[c-k] Estimated device memory: {total_mb:.1f} MB (σ: {sigma_mb:.1f} MB, T: {temp_mb:.2f} MB, g: {g_points_mb:.2f} MB, w: {g_weights_mb:.2f} MB)")
+    print(f"[CK] Estimated device memory: {total_mb:.1f} MB (σ: {sigma_mb:.1f} MB, T: {temp_mb:.2f} MB, g: {g_points_mb:.2f} MB, w: {g_weights_mb:.2f} MB)")
+
+    # Extract species names (lightweight: just strings)
+    _CK_SPECIES_NAMES = tuple(entry.name for entry in rectangularized_entries)
+
+    # Delete NumPy arrays to free memory (JAX caches now hold the data on device)
+    # This saves ~500+ MB for typical CK tables (biggest memory savings!)
+    del rectangularized_entries, entries, sigma_stacked, temp_stacked, g_points_stacked, g_weights_stacked
+    print(f"[CK] Freed NumPy temporary arrays from CPU memory")
 
     _clear_cache()
 
@@ -444,7 +452,9 @@ def load_ck_registry(cfg, obs, lam_master: Optional[np.ndarray] = None, base_dir
 
 @lru_cache(None)
 def ck_species_names() -> Tuple[str, ...]:
-    return tuple(entry.name for entry in _CK_ENTRIES)
+    if not _CK_SPECIES_NAMES:
+        raise RuntimeError("CK registry empty; call build_opacities() first.")
+    return _CK_SPECIES_NAMES
 
 
 @lru_cache(None)
