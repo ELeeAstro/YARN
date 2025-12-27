@@ -7,13 +7,16 @@ from __future__ import annotations
 
 import jax.numpy as jnp
 
-from .aux_functions import simpson
+import jax
+
+from .aux_functions import simpson_padded
 from .registry_bandpass import (
     bandpass_num_bins,
     bandpass_wavelengths_padded,
     bandpass_weights_padded,
     bandpass_indices_padded,
     bandpass_norms,
+    bandpass_valid_lengths,
 )
 
 __all__ = [
@@ -27,6 +30,7 @@ def _convolve_spectrum_core(
     w_pad: jnp.ndarray,
     idx_pad: jnp.ndarray,
     norms: jnp.ndarray,
+    valid_lens: jnp.ndarray,
 ) -> jnp.ndarray:
     """Convolve high-resolution spectrum into observational bins (JIT core).
 
@@ -40,16 +44,18 @@ def _convolve_spectrum_core(
         High-resolution spectrum evaluated on the master wavelength grid.
     wl_pad : `~jax.numpy.ndarray`, shape (nbin, max_len)
         Padded wavelength samples for each bin. Each row contains the wavelength
-        points where the response function is sampled, zero-padded to max_len.
+        points where the response function is sampled, padded to max_len.
     w_pad : `~jax.numpy.ndarray`, shape (nbin, max_len)
         Padded response weights/throughputs for each bin. Each row contains the
-        instrument response at the corresponding wavelengths, zero-padded.
+        instrument response at the corresponding wavelengths, padded.
     idx_pad : `~jax.numpy.ndarray`, shape (nbin, max_len)
         Padded indices into the high-resolution spectrum array. Maps each
         wavelength sample to its position in `spec`.
     norms : `~jax.numpy.ndarray`, shape (nbin,)
         Normalization factors for each bin, typically the integrated throughput:
         ∫ w(λ) dλ over the bin's wavelength range.
+    valid_lens : `~jax.numpy.ndarray`, shape (nbin,)
+        Number of valid (non-padded) points for each bin.
 
     Returns
     -------
@@ -62,28 +68,25 @@ def _convolve_spectrum_core(
     The convolution is computed as:
     1. Extract spectrum values at sampled wavelengths using `idx_pad`
     2. Multiply by response weights: F(λ) × w(λ)
-    3. Integrate using Simpson's rule (or simple weighted value for single-point bins)
+    3. Integrate using Simpson's rule with vmap over bins
     4. Normalize by integrated throughput
 
-    For bins with only one wavelength point, Simpson's rule is not applicable.
-    Instead, we use F(λ) × w(λ) directly. Single-point bins are detected when the
-    first two wavelengths in a row are identical (indicating padding).
+    The simpson_padded function handles the padded arrays correctly by using
+    valid_lens to determine which points are real vs padded.
 
     The normalization denominator is clamped to 1e-99 to prevent division by zero.
     """
     spec_pad = jnp.take(spec, idx_pad, axis=0)  # (nbin, max_len)
 
-    # Detect single-point bins: if first two wavelengths are equal, it's a padded single point
-    is_single_point = (wl_pad[:, 0] == wl_pad[:, 1])  # (nbin,) boolean array
+    # Integrate using Simpson's rule with vmap over bins
+    numerator = jax.vmap(simpson_padded, in_axes=(0, 0, 0))(
+        spec_pad * w_pad,  # y: (nbin, max_len)
+        wl_pad,            # x: (nbin, max_len)
+        valid_lens,        # n_valid: (nbin,)
+    )
 
-    # Single-point bins: use first spectrum value times first weight
-    single_point_result = spec_pad[:, 0] * w_pad[:, 0]  # (nbin,)
-
-    # Multi-point bins: use Simpson's rule integration
-    multi_point_result = simpson(spec_pad * w_pad, x=wl_pad, axis=1)  # (nbin,)
-
-    # Combine results based on bin type
-    numerator = jnp.where(is_single_point, single_point_result, multi_point_result)
+    # Alternative: use trapezoidal integration (commented out)
+    # numerator = jnp.trapezoid(spec_pad * w_pad, x=wl_pad, axis=1)  # (nbin,)
 
     return numerator / jnp.maximum(norms, 1e-99)
 
@@ -137,6 +140,7 @@ def apply_response_functions(spectrum: jnp.ndarray) -> jnp.ndarray:
     w_pad = bandpass_weights_padded()        # (nbin, max_len)
     idx_pad = bandpass_indices_padded()      # (nbin, max_len)
     norms = bandpass_norms()                 # (nbin,)
+    valid_lens = bandpass_valid_lengths()    # (nbin,)
 
     return _convolve_spectrum_core(
         spec=spectrum,
@@ -144,4 +148,5 @@ def apply_response_functions(spectrum: jnp.ndarray) -> jnp.ndarray:
         w_pad=w_pad,
         idx_pad=idx_pad,
         norms=norms,
+        valid_lens=valid_lens,
     )

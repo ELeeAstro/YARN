@@ -70,7 +70,8 @@ def _band_average(
         else:
             wl_seg = np.array([left, right], dtype=float)
             fl_seg = np.interp(wl_seg, wl_native, flux_native, left=flux_native[0], right=flux_native[-1])
-        out[i] = simpson(fl_seg, x=wl_seg) / (right - left)
+        out[i] = simpson(fl_seg, x=wl_seg) / (right - left)   
+        #out[i] = np.trapezoid(fl_seg, wl_seg) / (right - left)
     return out
 
 

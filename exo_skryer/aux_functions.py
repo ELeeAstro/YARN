@@ -12,7 +12,7 @@ from typing import Optional, Literal
 
 
 
-__all__ = ['pchip_1d', 'latin_hypercube', 'simpson']
+__all__ = ['pchip_1d', 'latin_hypercube', 'simpson', 'simpson_padded']
 
 
 def _pchip_slopes(x: jnp.ndarray, y: jnp.ndarray) -> jnp.ndarray:
@@ -256,6 +256,9 @@ def _simpson_odd_unequal(y: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
     # Composite Simpson for irregular spacing:
     # sum over pairs of intervals with widths h0, h1:
     #  (h0+h1)/6 * [ (2 - h1/h0) y0 + ((h0+h1)^2/(h0*h1)) y1 + (2 - h0/h1) y2 ]
+    #
+    # IMPORTANT: When h0 or h1 is zero (repeated x-values from padding),
+    # that interval contributes nothing to the integral.
     h = jnp.diff(x, axis=-1)              # (..., N-1)
     h0 = h[..., 0::2]                     # (..., (N-1)/2)
     h1 = h[..., 1::2]                     # (..., (N-1)/2)
@@ -265,11 +268,27 @@ def _simpson_odd_unequal(y: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
     y2 = y[..., 2::2]
 
     hsum = h0 + h1
-    term0 = (2.0 - (h1 / h0)) * y0
-    term1 = ((hsum * hsum) / (h0 * h1)) * y1
-    term2 = (2.0 - (h0 / h1)) * y2
 
-    return jnp.sum((hsum / 6.0) * (term0 + term1 + term2), axis=-1)
+    # Use a small epsilon to detect zero spacing (from repeated x-values)
+    eps = 1e-15
+    h0_is_zero = jnp.abs(h0) < eps
+    h1_is_zero = jnp.abs(h1) < eps
+
+    # When either h0 or h1 is zero, the interval contributes 0
+    # Use jnp.where to avoid division by zero
+    safe_h0 = jnp.where(h0_is_zero, 1.0, h0)  # Replace 0 with 1 to avoid division by zero
+    safe_h1 = jnp.where(h1_is_zero, 1.0, h1)
+
+    term0 = (2.0 - (h1 / safe_h0)) * y0
+    term1 = ((hsum * hsum) / (safe_h0 * safe_h1)) * y1
+    term2 = (2.0 - (h0 / safe_h1)) * y2
+
+    # Zero out contributions from intervals with zero spacing
+    interval_valid = ~(h0_is_zero | h1_is_zero)
+    contribution = (hsum / 6.0) * (term0 + term1 + term2)
+    contribution = jnp.where(interval_valid, contribution, 0.0)
+
+    return jnp.sum(contribution, axis=-1)
 
 
 def _simpson_odd(y: jnp.ndarray, x: Optional[jnp.ndarray], dx: float) -> jnp.ndarray:
@@ -279,7 +298,7 @@ def _simpson_odd(y: jnp.ndarray, x: Optional[jnp.ndarray], dx: float) -> jnp.nda
 
 
 def _simpson_even_cartwright_last_interval(y: jnp.ndarray, x: Optional[jnp.ndarray], dx: float) -> jnp.ndarray:
-    # “simpson” behaviour for even N: Simpson on first N-1 points + special last-interval correction
+    # "simpson" behaviour for even N: Simpson on first N-1 points + special last-interval correction
     # Uses last three points. For uniform spacing this reduces to:
     #   dx * (5/12*y[-1] + 2/3*y[-2] - 1/12*y[-3])
     if x is None:
@@ -289,11 +308,26 @@ def _simpson_even_cartwright_last_interval(y: jnp.ndarray, x: Optional[jnp.ndarr
     h0 = x[..., -2] - x[..., -3]
     h1 = x[..., -1] - x[..., -2]
 
-    alpha = (2.0 * h1 * h1 + 3.0 * h0 * h1) / (6.0 * (h0 + h1))
-    beta  = (h1 * h1 + 3.0 * h0 * h1)       / (6.0 * h0)
-    eta   = (h1 * h1 * h1)                  / (6.0 * h0 * (h0 + h1))
+    # Handle zero spacing (repeated x-values from padding)
+    eps = 1e-15
+    h0_is_zero = jnp.abs(h0) < eps
+    h1_is_zero = jnp.abs(h1) < eps
 
-    return alpha * y[..., -1] + beta * y[..., -2] - eta * y[..., -3]
+    # If either spacing is zero, fall back to trapezoid rule on the valid portion
+    # or return zero if both are zero
+    safe_h0 = jnp.where(h0_is_zero, 1.0, h0)
+    safe_h1 = jnp.where(h1_is_zero, 1.0, h1)
+
+    alpha = (2.0 * safe_h1 * safe_h1 + 3.0 * safe_h0 * safe_h1) / (6.0 * (safe_h0 + safe_h1))
+    beta  = (safe_h1 * safe_h1 + 3.0 * safe_h0 * safe_h1)       / (6.0 * safe_h0)
+    eta   = (safe_h1 * safe_h1 * safe_h1)                       / (6.0 * safe_h0 * (safe_h0 + safe_h1))
+
+    result = alpha * y[..., -1] + beta * y[..., -2] - eta * y[..., -3]
+
+    # If the last interval has zero spacing, the contribution should be zero
+    result = jnp.where(h1_is_zero, 0.0, result)
+
+    return result
 
 
 @functools.partial(jax.jit, static_argnames=("axis", "even"))
@@ -341,7 +375,7 @@ def simpson(
     if n == 1:
         return jnp.zeros(y.shape[:-1], dtype=y.dtype)
     if n == 2:
-        # Simpson not possible; fall back to trapezoid (SciPy does this in the even='simpson' path too). :contentReference[oaicite:3]{index=3}
+        # Simpson not possible; fall back to trapezoid
         return _trapz_last(y, x, dx)
 
     # Odd number of samples: standard composite Simpson
@@ -362,7 +396,7 @@ def simpson(
         return _trapz_first(y, x, dx) + base
 
     if mode == "avg":
-        # average of 'first' and 'last' (SciPy docs) :contentReference[oaicite:4]{index=4}
+        # average of 'first' and 'last'
         first = (
             _simpson_odd(y[..., :-1], None if x is None else x[..., :-1], dx) +
             _trapz_last(y, x, dx)
@@ -373,7 +407,179 @@ def simpson(
         )
         return 0.5 * (first + last)
 
-    # mode == "simpson": Simpson over first N-1 points + Cartwright-style last-interval correction (SciPy docs) :contentReference[oaicite:5]{index=5}
+    # mode == "simpson": Simpson over first N-1 points + Cartwright correction
     base = _simpson_odd(y[..., :-1], None if x is None else x[..., :-1], dx)
     corr = _simpson_even_cartwright_last_interval(y, x, dx)
     return base + corr
+
+
+# ============================================================================
+# Simpson integration for padded arrays with explicit valid lengths
+# ============================================================================
+
+def _move_last(a: jnp.ndarray, axis: int) -> jnp.ndarray:
+    """Move specified axis to last position."""
+    return jnp.moveaxis(a, axis, -1)
+
+
+def _take_last_axis(a: jnp.ndarray, idx: jnp.ndarray) -> jnp.ndarray:
+    """Take element from last axis at index idx. vmap-friendly."""
+    return jnp.take(a, idx, axis=-1, mode="clip")
+
+
+@functools.partial(jax.jit, static_argnames=("axis", "even"))
+def simpson_padded(
+    y: jnp.ndarray,
+    x: jnp.ndarray,
+    n_valid: jnp.ndarray,
+    *,
+    axis: int = -1,
+    even: str = "first",
+):
+    """
+    Composite Simpson integration for padded arrays with non-uniform spacing.
+
+    Safe when the padded tail repeats x values (zero spacing), as long as
+    n_valid indicates the number of true domain points.
+
+    Parameters
+    ----------
+    y : `~jax.numpy.ndarray`
+        Function values, padded to Nmax along `axis`.
+    x : `~jax.numpy.ndarray`
+        Sample points (same shape as y), padded to Nmax along `axis`.
+        Must be strictly increasing on the valid prefix [0:n_valid].
+    n_valid : int or `~jax.numpy.ndarray`
+        Number of valid (unpadded) points along `axis` (>= 2).
+        Can be scalar int or per-batch int array (vmap-friendly).
+    axis : int, optional
+        Axis of integration. Default: -1
+    even : {'first', 'last', 'avg'}, optional
+        Handling when n_valid is even:
+        - 'first': Simpson on first n_valid-1 + trapezoid on last interval
+        - 'last': Trapezoid on first + Simpson on last n_valid-1
+        - 'avg': Average of 'first' and 'last'
+        Default: 'first'
+
+    Returns
+    -------
+    integral : `~jax.numpy.ndarray`
+        Definite integral over valid region.
+        Returns NaN if grid is invalid (non-monotonic on valid prefix).
+
+    Notes
+    -----
+    This function is designed for batched integration via vmap:
+
+        result = jax.vmap(simpson_padded, in_axes=(0, 0, 0))(y_batch, x_batch, n_valid_batch)
+
+    The padded tail (indices >= n_valid) is safely ignored, even if x has
+    repeated values there.
+
+    Examples
+    --------
+    >>> wl_pad = jnp.array([1.0, 1.1, 1.2, 1.3, 1.3, 1.3])  # Padded with repeats
+    >>> y_pad = jnp.array([1.0, 1.1, 1.2, 1.3, 0.0, 0.0])
+    >>> result = simpson_padded(y_pad, wl_pad, n_valid=4)
+    """
+    from jax import lax
+
+    y = jnp.asarray(y)
+    x = jnp.asarray(x)
+    y = _move_last(y, axis)
+    x = _move_last(x, axis)
+
+    Nmax = y.shape[-1]
+    n = jnp.clip(n_valid, 2, Nmax)
+
+    # ---- Grid sanity: require strictly increasing x on valid prefix ----
+    # We can't slice with dynamic length under jit, so mask the diffs.
+    h_all = jnp.diff(x, axis=-1)  # (..., Nmax-1)
+    idx_h = jnp.arange(Nmax - 1)
+    h_mask = idx_h < (n - 1)      # True for valid diffs only
+    grid_ok = jnp.all(jnp.where(h_mask, h_all > 0.0, True), axis=-1)
+
+    # Simpson needs odd number of points; for even n we'll do Simpson on first n-1
+    m = jnp.where((n % 2) == 1, n, n - 1)  # odd, >= 3 unless n == 2
+
+    def core_simpson(_):
+        # Handle m == 2 (happens if n == 2): trapezoid on that single interval.
+        def trap_only(_):
+            i1 = n - 1
+            i0 = n - 2
+            h = _take_last_axis(x, i1) - _take_last_axis(x, i0)
+            return 0.5 * h * (_take_last_axis(y, i0) + _take_last_axis(y, i1))
+
+        def simpson_body(_):
+            # Pair indices for Simpson panels (y0, y1, y2) up to max possible for Nmax
+            n_pairs_max = (Nmax - 1) // 2
+            j = jnp.arange(n_pairs_max)
+
+            i0 = 2 * j
+            i1 = i0 + 1
+            i2 = i0 + 2
+
+            # A pair is valid iff i2 < m (all three points inside Simpson prefix)
+            pair_mask = i2 < m
+
+            # Gather y triplets (static-length slices, JIT-friendly)
+            y0 = y[..., 0:-2:2]
+            y1 = y[..., 1:-1:2]
+            y2 = y[..., 2::2]
+
+            # Interval widths for each Simpson panel
+            h = jnp.diff(x, axis=-1)          # (..., Nmax-1)
+            h0 = h[..., 0:-1:2]               # (..., n_pairs_max)
+            h1 = h[..., 1::2]                 # (..., n_pairs_max)
+
+            # Also require positive widths inside used region
+            pair_mask = pair_mask & (h0 > 0.0) & (h1 > 0.0)
+
+            hsum = h0 + h1
+
+            # Safe ratios (only used where pair_mask True)
+            r10 = jnp.where(pair_mask, h1 / h0, 0.0)
+            r01 = jnp.where(pair_mask, h0 / h1, 0.0)
+            mid = jnp.where(pair_mask, (hsum * hsum) / (h0 * h1), 0.0)
+
+            term0 = (2.0 - r10) * y0
+            term1 = mid * y1
+            term2 = (2.0 - r01) * y2
+
+            panel = (hsum / 6.0) * (term0 + term1 + term2)
+            panel = jnp.where(pair_mask, panel, 0.0)
+
+            simpson_part = jnp.sum(panel, axis=-1)
+
+            # Even-n handling
+            def add_last_trap(_):
+                i1 = n - 1
+                i0 = n - 2
+                hlast = _take_last_axis(x, i1) - _take_last_axis(x, i0)
+                trap = 0.5 * hlast * (_take_last_axis(y, i0) + _take_last_axis(y, i1))
+                return simpson_part + trap
+
+            def add_first_trap(_):
+                i0 = jnp.array(0, dtype=jnp.int32)
+                i1 = jnp.array(1, dtype=jnp.int32)
+                hfirst = _take_last_axis(x, i1) - _take_last_axis(x, i0)
+                trap = 0.5 * hfirst * (_take_last_axis(y, i0) + _take_last_axis(y, i1))
+                return trap + simpson_part
+
+            def even_adjust(_):
+                if even == "last":
+                    return add_first_trap(None)
+                if even == "avg":
+                    return 0.5 * (add_last_trap(None) + add_first_trap(None))
+                # default "first": Simpson on first n-1 + last trap
+                return add_last_trap(None)
+
+            return lax.cond((n % 2) == 0, even_adjust, lambda _: simpson_part, operand=None)
+
+        return lax.cond(m <= 2, trap_only, simpson_body, operand=None)
+
+    # If grid is bad (e.g., repeated x inside valid region), return NaN
+    def bad_grid(_):
+        return jnp.nan * jnp.ones(y.shape[:-1], dtype=y.dtype)
+
+    return lax.cond(grid_ok, core_simpson, bad_grid, operand=None)
